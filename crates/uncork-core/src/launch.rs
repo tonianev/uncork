@@ -421,6 +421,32 @@ pub fn base_env(
     env
 }
 
+/// Run a command built by [`WineRuntime`] (`wineboot`, `regedit`,
+/// `wineserver`, ...) with `bottle`'s shared environment: `env_clear`,
+/// [`base_env`], then the bottle's own `env` (for example `USER=crossover`
+/// in an imported CrossOver bottle), then the command's own variables, which
+/// win. Every process in a prefix must agree on `WINEMSYNC`; a client whose
+/// setting differs from the running wineserver's exits with status 1 and no
+/// output (measured: the first command after a `wineboot` without msync).
+#[must_use]
+pub fn in_bottle(spec: CommandSpec, bottle: &Bottle, wine: &WineRuntime) -> CommandSpec {
+    let mut env = base_env(bottle, wine, None);
+    env.extend(
+        bottle
+            .config
+            .env
+            .iter()
+            .filter(|(key, _)| key.as_str() != OVERRIDES_VAR)
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    env.extend(spec.env);
+    CommandSpec {
+        env,
+        env_clear: true,
+        ..spec
+    }
+}
+
 /// The backend a launch of `target` would use, without building the whole
 /// plan (for `uncork inspect` and `uncork play --dry-run`).
 ///

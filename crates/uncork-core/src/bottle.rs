@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{read_toml, write_toml_atomic};
 use crate::graphics::{Backend, BackendChoice};
+use crate::launch::in_bottle;
 use crate::paths::Layout;
 use crate::process::CommandSpec;
 use crate::registry::{RegKey, RegValue};
@@ -463,7 +464,10 @@ fn create_with_timeout(
         log.display()
     );
     boot_prefix(&bottle, wine, &log, boot_timeout)?;
-    crate::process::run(&logged(wine.wait_command(&bottle.path), Some(&log)))?;
+    crate::process::run(&logged(
+        in_bottle(wine.wait_command(&bottle.path), &bottle, wine),
+        Some(&log),
+    ))?;
     import_registry(&bottle, wine, &default_registry(&bottle.config), Some(&log))?;
     bottle.state.prefix_wine = Some(wine.version.clone());
     bottle.save_state()?;
@@ -526,8 +530,10 @@ fn boot_prefix(
         status,
         log_hint: format!(" (log: {})", log.display()),
     };
-    let mut child =
-        crate::process::spawn(&logged(wine.boot_init_command(&bottle.path), Some(log)))?;
+    let mut child = crate::process::spawn(&logged(
+        in_bottle(wine.boot_init_command(&bottle.path), bottle, wine),
+        Some(log),
+    ))?;
     let exit = wait_with_timeout(&mut child, timeout)
         .map_err(|err| crate::Error::io("cannot wait for wineboot in", &bottle.path, err))?;
     match exit {
@@ -535,9 +541,10 @@ fn boot_prefix(
         Some(status) => Err(failed(describe_exit(status))),
         None => {
             stop(&mut child);
-            if let Err(err) =
-                crate::process::run(&logged(wine.kill_command(&bottle.path), Some(log)))
-            {
+            if let Err(err) = crate::process::run(&logged(
+                in_bottle(wine.kill_command(&bottle.path), bottle, wine),
+                Some(log),
+            )) {
                 tracing::warn!(
                     "could not stop the wineserver of {}: {err}",
                     bottle.path.display()
@@ -677,7 +684,11 @@ fn import_registry(
 
     let windows_path = format!(r"C:\windows\temp\{file_name}");
     let imported = crate::process::run(&logged(
-        wine.regedit_import_command(&bottle.path, &windows_path),
+        in_bottle(
+            wine.regedit_import_command(&bottle.path, &windows_path),
+            bottle,
+            wine,
+        ),
         log,
     ));
     if let Err(err) = std::fs::remove_file(&reg_file) {
@@ -698,7 +709,11 @@ pub fn delete(layout: &Layout, name: &str, wine: Option<&WineRuntime>) -> crate:
     }
     if let Some(wine) = wine {
         // Fails harmlessly when no wineserver runs for the prefix.
-        if let Err(err) = crate::process::run(&wine.kill_command(&path)) {
+        let kill = match Bottle::open(&path) {
+            Ok(bottle) => in_bottle(wine.kill_command(&path), &bottle, wine),
+            Err(_) => wine.kill_command(&path),
+        };
+        if let Err(err) = crate::process::run(&kill) {
             tracing::debug!("wineserver --kill for bottle {name}: {err}");
         }
     }

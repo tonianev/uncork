@@ -174,8 +174,12 @@ fn start(ctx: &Ctx, flags: &LaunchFlags) -> anyhow::Result<ExitCode> {
     )?;
     if let (true, Some(mut child)) = (flags.wait, child) {
         let status = child.wait().context("cannot wait for Steam")?;
-        uncork_core::process::run(&wine.wait_command(bottle.prefix()))
-            .context("cannot wait for the bottle's wineserver")?;
+        uncork_core::process::run(&uncork_core::launch::in_bottle(
+            wine.wait_command(bottle.prefix()),
+            &bottle,
+            &wine,
+        ))
+        .context("cannot wait for the bottle's wineserver")?;
         println!("Steam exited ({status}).");
     }
     Ok(ExitCode::SUCCESS)

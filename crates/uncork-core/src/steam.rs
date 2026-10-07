@@ -182,7 +182,7 @@ fn install_with(
     // to the user, in the foreground.
     let kill = CommandSpec {
         log: Some(log.clone()),
-        ..wine.kill_command(bottle.prefix())
+        ..crate::launch::in_bottle(wine.kill_command(bottle.prefix()), bottle, wine)
     };
     if let Err(err) = crate::process::run(&kill) {
         tracing::debug!("wineserver --kill after the Steam installer: {err}");
@@ -463,7 +463,7 @@ fn stop_with(
             "{}-steam-stop.log",
             crate::launch::sanitize_file_part(name)
         ))),
-        ..wine.kill_command(bottle.prefix())
+        ..crate::launch::in_bottle(wine.kill_command(bottle.prefix()), bottle, wine)
     };
     crate::process::run(&kill)?;
     forget_client(bottle, wine)

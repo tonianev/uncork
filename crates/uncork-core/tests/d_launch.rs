@@ -151,6 +151,31 @@ fn base_env_follows_the_bottle_and_the_runtime() {
     assert_eq!(env["MVK_CONFIG_LOG_LEVEL"], "1");
 }
 
+#[test]
+fn wine_tools_share_the_bottle_environment() {
+    let fx = Fixture::new(&["msync"]);
+    let bottle = fx.bottle("cx", |config| {
+        config.env.insert("USER".to_owned(), "crossover".to_owned());
+        config
+            .env
+            .insert("WINEDLLOVERRIDES".to_owned(), "dinput8=n,b".to_owned());
+    });
+    let boot = launch::in_bottle(fx.wine.boot_init_command(&bottle.path), &bottle, &fx.wine);
+    assert!(boot.env_clear);
+    assert_eq!(
+        boot.env["WINEMSYNC"], "1",
+        "wineboot must match later clients"
+    );
+    assert_eq!(boot.env["USER"], "crossover");
+    assert_eq!(boot.env["WINEPREFIX"], bottle.path.to_str().unwrap());
+    assert!(
+        boot.env["WINEDLLOVERRIDES"].contains("mscoree"),
+        "the tool's own overrides win over the bottle's game overrides: {}",
+        boot.env["WINEDLLOVERRIDES"]
+    );
+    assert_eq!(boot.args, fx.wine.boot_init_command(&bottle.path).args);
+}
+
 // ----- the command -----
 
 #[test]

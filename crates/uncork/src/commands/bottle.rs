@@ -611,7 +611,11 @@ fn import(ctx: &Ctx, source: &Path, name: Option<&str>, move_: bool) -> anyhow::
 fn kill(ctx: &Ctx, name: &str) -> anyhow::Result<ExitCode> {
     let bottle = Bottle::open_named(&ctx.layout, name)?;
     let wine = bottle_wine(&ctx.layout, &bottle)?;
-    match uncork_core::process::run(&wine.kill_command(bottle.prefix())) {
+    match uncork_core::process::run(&launch::in_bottle(
+        wine.kill_command(bottle.prefix()),
+        &bottle,
+        &wine,
+    )) {
         Ok(()) => {
             // A killed Steam client leaves its pid in the registry, which
             // would make `uncork play` think Steam is still running.

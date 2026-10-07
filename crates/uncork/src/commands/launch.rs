@@ -357,8 +357,12 @@ fn report_launch(
     let status = child
         .wait()
         .with_context(|| format!("cannot wait for {program}"))?;
-    uncork_core::process::run(&wine.wait_command(bottle.prefix()))
-        .context("cannot wait for the bottle's wineserver")?;
+    uncork_core::process::run(&uncork_core::launch::in_bottle(
+        wine.wait_command(bottle.prefix()),
+        bottle,
+        wine,
+    ))
+    .context("cannot wait for the bottle's wineserver")?;
     println!("{program} exited ({status}).");
     Ok(if status.success() {
         ExitCode::SUCCESS
