@@ -115,9 +115,10 @@ pub enum Error {
     Command {
         /// The program (file name only).
         program: String,
-        /// "could not start: ..." or "exited with status N".
+        /// `could not start: <io error>`, `exited with status N` or
+        /// `was killed by signal N`.
         status: String,
-        /// " (log: <path>)" when output was captured, else empty.
+        /// `" (log: <path>)"` when output was captured, else empty.
         log_hint: String,
     },
 
