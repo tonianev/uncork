@@ -612,7 +612,16 @@ fn kill(ctx: &Ctx, name: &str) -> anyhow::Result<ExitCode> {
     let bottle = Bottle::open_named(&ctx.layout, name)?;
     let wine = bottle_wine(&ctx.layout, &bottle)?;
     match uncork_core::process::run(&wine.kill_command(bottle.prefix())) {
-        Ok(()) => println!("Stopped every Windows process in bottle {name}."),
+        Ok(()) => {
+            // A killed Steam client leaves its pid in the registry, which
+            // would make `uncork play` think Steam is still running.
+            if uncork_steam::SteamInstall::find(bottle.prefix()).is_some()
+                && let Err(err) = uncork_core::steam::forget_client(&bottle, &wine)
+            {
+                tracing::warn!("cannot reset Steam's running marker: {err}");
+            }
+            println!("Stopped every Windows process in bottle {name}.");
+        }
         // wineserver exits non-zero when there was nothing to stop.
         Err(uncork_core::Error::Command { status, .. }) if status.starts_with("exited") => {
             println!("Nothing was running in bottle {name}.");

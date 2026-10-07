@@ -140,6 +140,9 @@ pub struct LaunchOptions {
     pub wine_debug: Option<String>,
     /// `KEY=VALUE` pairs from `--env`, already split.
     pub env: BTreeMap<String, String>,
+    /// Force the Game Mode bundle on or off for this launch; `None` keeps the
+    /// bottle's `performance.game_mode` (see [`crate::gamemode`]).
+    pub game_mode: Option<bool>,
 }
 
 /// A planned launch.
@@ -156,6 +159,20 @@ pub struct LaunchPlan {
     /// Warnings worth printing (anti-cheat detected, 32-bit game on a
     /// runtime without `wow64`, D3D12 without D3DMetal, ...).
     pub warnings: Vec<String>,
+    /// Start through a Game Mode app bundle instead of directly
+    /// (experimental; [`crate::gamemode`]).
+    pub game_mode: Option<GameModeLaunch>,
+}
+
+/// Where and as what a plan is wrapped for Game Mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GameModeLaunch {
+    /// Data root whose `apps/` holds the bundle.
+    pub root: PathBuf,
+    /// Bundle id part (`apps/<id>.app`, `dev.uncork.game.<id>`).
+    pub id: String,
+    /// Display name.
+    pub name: String,
 }
 
 /// Inputs for [`plan`].
@@ -275,17 +292,51 @@ pub fn plan(
         cwd,
         log: Some(log.clone()),
     };
+    let game_mode = options
+        .game_mode
+        .unwrap_or(ctx.bottle.config.performance.game_mode)
+        .then(|| GameModeLaunch {
+            root: ctx.layout.root().to_path_buf(),
+            id: ctx.profile.map_or_else(
+                || game_mode_id(&ctx.bottle.config.name, &stem),
+                |profile| profile.id.clone(),
+            ),
+            name: ctx
+                .profile
+                .map_or_else(|| stem.clone(), |profile| profile.name.clone()),
+        });
     Ok(LaunchPlan {
         command,
         activation,
         backend_reason: reason,
         log,
         warnings,
+        game_mode,
     })
 }
 
+/// A bundle id for a program without a profile: `<bottle>-<stem>`, lowercase,
+/// with anything but ASCII letters and digits turned into `-`.
+fn game_mode_id(bottle: &str, stem: &str) -> String {
+    format!("{bottle}-{stem}")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_owned()
+}
+
 /// Apply the plan's backend copies and any registry the launch needs, then
-/// spawn the command (not waiting). Returns the child.
+/// spawn the command (not waiting). Returns the child. With
+/// [`LaunchPlan::game_mode`] set, the command is wrapped in a Game Mode
+/// bundle ([`crate::gamemode::prepare_bundle`], launcher = this executable)
+/// and the child is `/usr/bin/open -n -W <bundle>`.
 ///
 /// Creates `<bottle>/cache/dxmt` and `<bottle>/cache/dxvk` (the shader
 /// caches the activation points at) and performs the activation's copies
@@ -302,7 +353,23 @@ pub fn execute(
     _wine: &WineRuntime,
 ) -> crate::Result<std::process::Child> {
     prepare(plan, bottle)?;
-    crate::process::spawn(&plan.command)
+    match &plan.game_mode {
+        None => crate::process::spawn(&plan.command),
+        Some(game_mode) => {
+            // The bundle's launcher is this program; it `exec`s the plan.
+            let launcher = std::env::current_exe()
+                .map_err(|err| Error::io("cannot locate", "the uncork binary", err))?;
+            let layout = Layout::at(&game_mode.root);
+            let bundle = crate::gamemode::prepare_bundle(
+                &layout,
+                &game_mode.id,
+                &game_mode.name,
+                plan,
+                &launcher,
+            )?;
+            crate::process::spawn(&crate::gamemode::open_command(&bundle))
+        }
+    }
 }
 
 /// Everything [`execute`] does before spawning: cache directories and the

@@ -125,6 +125,10 @@ pub struct LaunchFlags {
     #[arg(short, long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
 
+    /// Start through a macOS Game Mode app bundle (experimental; see docs/PERFORMANCE.md).
+    #[arg(long)]
+    pub game_mode: bool,
+
     /// Print the launch plan (command, environment, DLLs to install) and exit.
     #[arg(long)]
     pub dry_run: bool,

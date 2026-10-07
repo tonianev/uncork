@@ -246,6 +246,48 @@ fn wine_programs_run_on_wined3d_without_a_working_directory() {
 }
 
 #[test]
+fn game_mode_wraps_the_plan_when_the_bottle_or_the_command_line_asks() {
+    let fx = Fixture::new(CX_FEATURES);
+    let target = Target::WineProgram {
+        name: "winecfg".to_owned(),
+        args: Vec::new(),
+    };
+
+    let off = fx.bottle("steam", |_| {});
+    let plan = launch::plan(
+        ctx(&fx, &off, &[], None),
+        &target,
+        &LaunchOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(plan.game_mode, None, "game mode is off by default");
+
+    let forced = LaunchOptions {
+        game_mode: Some(true),
+        ..LaunchOptions::default()
+    };
+    let plan = launch::plan(ctx(&fx, &off, &[], None), &target, &forced).unwrap();
+    let game_mode = plan.game_mode.expect("--game-mode turns it on");
+    assert_eq!(game_mode.root, fx.layout.root());
+    assert_eq!(game_mode.id, "steam-winecfg");
+    assert_eq!(game_mode.name, "winecfg");
+
+    let on = fx.bottle("Games 2", |config| config.performance.game_mode = true);
+    let plan = launch::plan(ctx(&fx, &on, &[], None), &target, &LaunchOptions::default()).unwrap();
+    assert_eq!(plan.game_mode.unwrap().id, "games-2-winecfg");
+
+    let declined = LaunchOptions {
+        game_mode: Some(false),
+        ..LaunchOptions::default()
+    };
+    let plan = launch::plan(ctx(&fx, &on, &[], None), &target, &declined).unwrap();
+    assert_eq!(
+        plan.game_mode, None,
+        "--game-mode=false wins over the bottle"
+    );
+}
+
+#[test]
 fn a_missing_executable_needs_a_profile_that_declares_it() {
     let fx = Fixture::new(CX_FEATURES);
     let bottle = fx.bottle("steam", |_| {});

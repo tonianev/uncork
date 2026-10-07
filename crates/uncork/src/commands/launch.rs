@@ -35,6 +35,7 @@ pub(super) fn launch_options(flags: &LaunchFlags) -> anyhow::Result<LaunchOption
         retina: flags.retina,
         wine_debug: flags.wine_debug.clone(),
         env,
+        game_mode: flags.game_mode.then_some(true),
     })
 }
 
@@ -395,6 +396,7 @@ mod tests {
             retina: false,
             wine_debug: Some("+loaddll".to_owned()),
             env: env.iter().map(|&item| item.to_owned()).collect(),
+            game_mode: false,
             dry_run: true,
             wait: false,
         }
@@ -478,6 +480,7 @@ mod tests {
             backend_reason: "32-bit D3D11: DXMT".to_owned(),
             log: "/u/logs/b-game-1.log".into(),
             warnings: vec!["anti-cheat found".to_owned()],
+            game_mode: None,
         };
         let ini = vec![IniEditView {
             file: r"%APPDATA%\G\g.ini".to_owned(),
