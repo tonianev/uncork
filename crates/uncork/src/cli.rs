@@ -21,7 +21,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
     max_term_width = 100
 )]
 pub struct Cli {
-    /// Print machine-readable JSON instead of text (list, info and inspect commands).
+    /// Print machine-readable JSON instead of text (doctor, list, info, show,
+    /// inspect, games and --dry-run output).
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -71,6 +72,11 @@ pub enum Command {
 
     /// Run winetricks verbs in a bottle (needs `brew install winetricks`).
     Winetricks(WinetricksArgs),
+
+    /// Run a saved launch plan in place of this process (used by Game Mode
+    /// app bundles; not for direct use).
+    #[command(name = "__exec", hide = true)]
+    Exec(ExecArgs),
 }
 
 /// Graphics backend selection on the command line.
@@ -189,6 +195,8 @@ pub enum RuntimeCommand {
     /// List components available to install (the pinned catalog).
     Available,
     /// Install components: `wine`, `dxmt`, `dxvk`, or `all` (default: all recommended).
+    // `--version` names a component version here, not Uncork's own.
+    #[command(disable_version_flag = true)]
     Install {
         /// Component kinds.
         kinds: Vec<String>,
@@ -200,6 +208,7 @@ pub enum RuntimeCommand {
         yes: bool,
     },
     /// Remove an installed component version.
+    #[command(disable_version_flag = true)]
     Remove {
         /// Component kind.
         kind: String,
@@ -338,4 +347,72 @@ pub struct WinetricksArgs {
     /// Verbs, e.g. `corefonts vcrun2022`.
     #[arg(required = true)]
     pub verbs: Vec<String>,
+}
+
+/// `uncork __exec` (hidden).
+#[derive(Debug, Args)]
+pub struct ExecArgs {
+    /// A JSON file holding a serialized `CommandSpec` (or a `LaunchPlan`,
+    /// whose `command` is used).
+    pub plan: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory as _;
+
+    use super::*;
+
+    #[test]
+    fn the_command_line_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn runtime_install_takes_a_component_version() {
+        let cli =
+            Cli::try_parse_from(["uncork", "runtime", "install", "dxmt", "--version", "0.80"])
+                .unwrap();
+        let Command::Runtime(RuntimeCommand::Install {
+            kinds,
+            version,
+            yes,
+        }) = cli.command
+        else {
+            panic!("parsed as {:?}", cli.command);
+        };
+        assert_eq!(kinds, ["dxmt"]);
+        assert_eq!(version.as_deref(), Some("0.80"));
+        assert!(!yes);
+    }
+
+    #[test]
+    fn launch_arguments_follow_a_double_dash() {
+        let cli = Cli::try_parse_from([
+            "uncork",
+            "play",
+            "rise",
+            "--hud",
+            "-e",
+            "A=1",
+            "--",
+            "-windowed",
+            "--x",
+        ])
+        .unwrap();
+        let Command::Play(play) = cli.command else {
+            panic!("parsed as {:?}", cli.command);
+        };
+        assert_eq!(play.game, "rise");
+        assert!(play.launch.hud);
+        assert_eq!(play.launch.env, ["A=1"]);
+        assert_eq!(play.args, ["-windowed", "--x"]);
+    }
+
+    #[test]
+    fn exec_is_hidden() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(!help.contains("__exec"), "{help}");
+        assert!(Cli::try_parse_from(["uncork", "__exec", "/tmp/plan.json"]).is_ok());
+    }
 }
