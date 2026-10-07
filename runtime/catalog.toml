@@ -1,0 +1,78 @@
+# Uncork component catalog: the exact upstream archives `uncork runtime
+# install` may download. Every entry is pinned by URL, size and SHA-256;
+# Uncork refuses an archive that does not match. Changing a pin is a
+# reviewed pull request (docs/RUNTIME.md, "Updating a pin"): the author
+# downloads the file, computes the hash themselves, and records the license
+# and where the source code lives.
+#
+# Uncork never mirrors these files; it fetches them from their publishers.
+# D3DMetal is never listed: it is imported from the user's own copy of
+# Apple's Game Porting Toolkit (`uncork runtime import-gptk`).
+#
+# Wine feature tags (docs/RUNTIME.md, "Runtime features"):
+#   wow64              runs 32-bit Windows programs (new-style WoW64)
+#   msync              honors WINEMSYNC=1 (Mach-semaphore synchronization)
+#   dxmt               winemac exports the Metal view API that DXMT needs
+#   d3dmetal           CrossOver-derived glue that D3DMetal needs
+#   renderer-dllpath   honors WINEDLLPATH_DXMT / _DXVK / _D3DMETAL per process
+#   dllpath-prepend    honors WINEDLLPATH_PREPEND per process
+#   large-address-aware honors WINE_LARGE_ADDRESS_AWARE=1
+
+schema = 1
+
+# --- Wine ------------------------------------------------------------------
+
+[[component]]
+kind = "wine"
+version = "sikarugir-11.0_1"
+url = "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS12WineSikarugir11.0_1.tar.xz"
+sha256 = "67e29fb3d74f363af39c69ba11f9b13a79812c5db07cf4748672658e4a200a0e"
+size = 167322744
+archive = "tar.xz"
+license = "LGPL-2.1-or-later"
+source_code = "https://github.com/Sikarugir-App/wine"
+homepage = "https://github.com/Sikarugir-App/Sikarugir"
+features = ["wow64", "dxmt", "d3dmetal", "renderer-dllpath"]
+recommended = true
+notes = "Wine 11.0 for macOS by Gcenx (Sikarugir engine). Per-process DXMT/DXVK/D3DMetal selection."
+
+[[component]]
+kind = "wine"
+version = "winecx-gptk-4.7.3"
+url = "https://github.com/dappermint/winecx-gptk/releases/download/runtime-v4.7.3/Libraries.tar.gz"
+sha256 = "a4b5d63493f80698cce5cad8e7212d9a51c8292037b00c478f4652636fcfd331"
+size = 461131598
+archive = "tar.gz"
+license = "LGPL-2.1-or-later"
+source_code = "https://github.com/dappermint/winecx"
+homepage = "https://github.com/dappermint/winecx-gptk"
+features = ["wow64", "msync", "dxmt", "d3dmetal", "large-address-aware"]
+notes = "CrossOver 26.3's Wine changes on Wine 11.17, with msync. Backends are copied into the prefix."
+
+# --- Graphics --------------------------------------------------------------
+
+[[component]]
+kind = "dxmt"
+version = "0.80"
+url = "https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz"
+sha256 = "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d"
+size = 18681669
+archive = "tar.gz"
+license = "MIT"
+source_code = "https://github.com/3Shain/dxmt/tree/v0.80"
+homepage = "https://github.com/3Shain/dxmt"
+recommended = true
+notes = "Direct3D 10/11 to Metal, 32- and 64-bit. The last MIT-licensed release."
+
+[[component]]
+kind = "dxvk"
+version = "1.10.3-20230507"
+url = "https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507-repack/dxvk-macOS-async-v1.10.3-20230507-repack-builtin.tar.gz"
+sha256 = "810b1e5caf8ce975b784fae866a130ad23fa0ea233b0e5609cbc4a45f3ef6f00"
+size = 2785833
+archive = "tar.gz"
+license = "Zlib"
+source_code = "https://github.com/Gcenx/DXVK-macOS/tree/v1.10.3-20230507-repack"
+homepage = "https://github.com/Gcenx/DXVK-macOS"
+recommended = true
+notes = "Direct3D 10/11 to Vulkan on MoltenVK. Fallback: no geometry shaders on MoltenVK."

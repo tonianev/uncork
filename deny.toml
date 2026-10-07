@@ -1,0 +1,65 @@
+# cargo-deny: licenses, advisories, bans and sources for the Rust code.
+# This covers Uncork's own dependency graph only. The Wine, DXMT and DXVK
+# components Uncork downloads at run time carry their own licenses, recorded
+# per entry in runtime/catalog.toml and explained in docs/LEGAL.md.
+
+[graph]
+all-features = true
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+]
+
+[output]
+feature-depth = 1
+
+[advisories]
+db-path = "$CARGO_HOME/advisory-dbs"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "MPL-2.0",
+  "CC0-1.0",
+  "BSL-1.0",
+  "0BSD",
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+deny = [
+  # Uncork's HTTP client is ureq with rustls; an async runtime or OpenSSL in
+  # the graph means a dependency slipped in by accident.
+  { name = "tokio", reason = "Uncork is synchronous; see docs/ARCHITECTURE.md" },
+  { name = "openssl-sys", reason = "TLS is rustls only" },
+]
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

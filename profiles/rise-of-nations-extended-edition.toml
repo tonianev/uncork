@@ -1,0 +1,48 @@
+# Rise of Nations: Extended Edition (SkyBox Labs, 2014).
+# Facts checked on the shipping build (Steam buildid 14787288):
+# riseofnations.exe is PE32 (i386), not large-address-aware, NX-compatible.
+# Its renderer d3dgl.dll imports d3d11.dll and D3DCOMPILER_47.dll and
+# compiles the HLSL in shaders/ (including geometry shaders) at run time.
+# D3DMetal is 64-bit only and MoltenVK has no geometry shaders, so DXMT is
+# the only Metal path; WineD3D (OpenGL) is the fallback.
+
+schema = 1
+id = "rise-of-nations-extended-edition"
+name = "Rise of Nations: Extended Edition"
+
+[steam]
+appid = 287450
+
+[exe]
+path = "riseofnations.exe"
+bitness = "x86"
+api = "d3d11"
+geometry_shaders = true
+
+[graphics]
+backend = "dxmt"
+fallbacks = ["wined3d"]
+
+[wine]
+windows_version = "win10"
+
+[env]
+# Give the 32-bit game a 4 GiB address space on runtimes that honor it.
+WINE_LARGE_ADDRESS_AWARE = "1"
+
+[dll_overrides]
+# Use the Microsoft HLSL compilers the game ships, not Wine's vkd3d-shader
+# builtins (Wine 11.10+ prefers builtin d3dcompiler; CrossOver prefers native).
+d3dcompiler_47 = "n,b"
+d3dcompiler_46 = "n,b"
+
+[[ini]]
+file = '%APPDATA%\Microsoft Games\Rise of Nations\rise2.ini'
+section = "RISE OF NATIONS"
+key = "SkipIntroMovies"
+value = "1"
+reason = "The intro videos are WMV through DirectShow; without GStreamer WMV decoders they stall the game under Wine."
+
+[compat]
+status = "untested"
+notes = "Launch Steam first (uncork play does this). Multiplayer lobbies use PlayFab over WinHTTP; report whether they load."

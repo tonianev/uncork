@@ -1,0 +1,25 @@
+# Age of Empires II: Definitive Edition (Forgotten Empires / World's Edge).
+# Facts checked on the shipping build: AoE2DE_s.exe is PE32+ (x86-64),
+# large-address-aware, NX-compatible, and imports d3d11.dll, dxgi.dll and
+# steam_api64.dll. BsSndRpt64.exe and BugSplatHD64.exe are crash reporters;
+# WebClient.exe is a 32-bit .NET helper.
+
+schema = 1
+id = "age-of-empires-2-definitive-edition"
+name = "Age of Empires II: Definitive Edition"
+
+[steam]
+appid = 813780
+
+[exe]
+path = "AoE2DE_s.exe"
+bitness = "x64"
+api = "d3d11"
+
+[graphics]
+backend = "dxmt"
+fallbacks = ["d3dmetal", "dxvk", "wined3d"]
+
+[compat]
+status = "untested"
+notes = "Crossplay multiplayer is the reason to run the Windows version rather than the native Mac port."

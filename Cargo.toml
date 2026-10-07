@@ -1,0 +1,70 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tonianev/uncork"
+homepage = "https://github.com/tonianev/uncork"
+authors = ["Toni Anev", "Uncork contributors"]
+publish = false
+
+[workspace.dependencies]
+# workspace crates
+uncork-core = { path = "crates/uncork-core" }
+uncork-pe = { path = "crates/uncork-pe" }
+uncork-steam = { path = "crates/uncork-steam" }
+
+# shared
+serde = { version = "1", features = ["derive"] }
+toml = "1.1"
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
+
+# PE inspection (uncork-pe only)
+object = { version = "0.40", default-features = false, features = ["read_core", "pe", "std"] }
+
+# runtime downloads (uncork-core only)
+ureq = "3.4"
+sha2 = "0.11"
+hex = "0.4"
+tar = "0.4"
+flate2 = "1.1"
+liblzma = { version = "0.4", features = ["static"] }
+
+# dev-dependencies
+tempfile = "3.27"
+proptest = "1.11"
+assert_cmd = "2.2"
+predicates = "3.1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+doc_markdown = "warn"
+manual_let_else = "warn"
+match_same_arms = "warn"
+needless_pass_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+# One profile for every CI compile so one target dir is cached.
+[profile.ci]
+inherits = "dev"
+incremental = false
+debug = "line-tables-only"

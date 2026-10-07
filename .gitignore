@@ -1,0 +1,9 @@
+/target
+/dist
+*.dSYM
+.DS_Store
+*.profraw
+/.claude/worktrees
+# Local runtime build trees (runtime/build.sh)
+/runtime/work
+/runtime/out
