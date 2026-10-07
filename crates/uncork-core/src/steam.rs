@@ -180,3 +180,58 @@ pub fn logs_dir(bottle: &Bottle) -> std::path::PathBuf {
         .join(Path::new(uncork_steam::client::STEAM_DIR))
         .join("logs")
 }
+
+/// What [`play`] did.
+#[derive(Debug)]
+pub struct PlayOutcome {
+    /// The game's launch plan.
+    pub plan: LaunchPlan,
+    /// The started game process; `None` for a dry run.
+    pub child: Option<std::process::Child>,
+    /// INI files the profile changed before launch.
+    pub ini_changed: Vec<std::path::PathBuf>,
+    /// `true` if Steam had to be started first.
+    pub started_steam: bool,
+}
+
+/// Play Steam app `appid` in `bottle`: the whole `uncork play` flow, shared
+/// by the CLI and (later) the macOS app.
+///
+/// 1. Find the app ([`plan_game`] with `profile`, `args`, `options`).
+/// 2. `dry_run`: return the plan without touching anything.
+/// 3. Apply the profile's INI edits ([`crate::launch::apply_profile_ini`]).
+/// 4. By launch mode: `Direct` → [`ensure_running`] (timeout
+///    `steam_timeout`) then [`crate::launch::execute`] the plan;
+///    `Applaunch` → [`stop`] a running client, then start the client with the
+///    game's environment and `-applaunch <appid> <args>` (the game inherits
+///    it); `Standalone` → execute the plan without Steam.
+///
+/// # Errors
+/// Lookup, planning, Steam start or spawn errors.
+#[allow(clippy::too_many_arguments)]
+pub fn play(
+    layout: &Layout,
+    bottle: &mut Bottle,
+    wine: &WineRuntime,
+    components: &[crate::component::InstalledComponent],
+    profile: Option<&crate::profile::GameProfile>,
+    appid: u32,
+    args: &[String],
+    options: &LaunchOptions,
+    steam_timeout: Duration,
+    dry_run: bool,
+) -> crate::Result<PlayOutcome> {
+    let _ = (
+        layout,
+        bottle,
+        wine,
+        components,
+        profile,
+        appid,
+        args,
+        options,
+        steam_timeout,
+        dry_run,
+    );
+    todo!()
+}

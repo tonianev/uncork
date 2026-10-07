@@ -186,3 +186,37 @@ pub fn choose_backend(
     let _ = (ctx, target, options);
     todo!()
 }
+
+/// Resolve a profile INI path (`%APPDATA%\\...`, `%LOCALAPPDATA%\\...`,
+/// `%USERPROFILE%\\...`, `%INSTALLDIR%\\...`; `/` or `\\` separators) to a
+/// macOS path. `%APPDATA%` is `drive_c/users/<user>/AppData/Roaming`,
+/// `%LOCALAPPDATA%` is `.../AppData/Local`, `%USERPROFILE%` is
+/// `drive_c/users/<user>`, where `<user>` is the bottle's `env.USER` if set,
+/// else the only directory in `drive_c/users` other than `Public`, else the
+/// current `USER`. `%INSTALLDIR%` needs `install_dir`. Returns `None` for an
+/// unknown base, a missing `install_dir`, or `..` components.
+#[must_use]
+pub fn resolve_profile_path(
+    bottle: &Bottle,
+    install_dir: Option<&std::path::Path>,
+    file: &str,
+) -> Option<PathBuf> {
+    let _ = (bottle, install_dir, file);
+    todo!()
+}
+
+/// Apply a profile's `[[ini]]` edits (grouped per file, via
+/// [`crate::ini::apply_to_file`]; files that do not exist yet are skipped).
+/// Returns the files that changed.
+///
+/// # Errors
+/// [`crate::Error::Io`] from writing, or [`crate::Error::Config`] when a
+/// path cannot be resolved.
+pub fn apply_profile_ini(
+    profile: &GameProfile,
+    bottle: &Bottle,
+    install_dir: Option<&std::path::Path>,
+) -> crate::Result<Vec<PathBuf>> {
+    let _ = (profile, bottle, install_dir);
+    todo!()
+}
