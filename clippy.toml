@@ -1,0 +1,15 @@
+# Names that appear in documentation prose and are not code identifiers.
+# ".." keeps Clippy's defaults (macOS, GitHub, ...).
+doc-valid-idents = [
+    "..",
+    "CrossOver",
+    "D3DMetal",
+    "DirectDraw",
+    "KeyValues",
+    "LaunchServices",
+    "MetalFX",
+    "MoltenVK",
+    "WineD3D",
+    "WoW64",
+    "x86_64",
+]
