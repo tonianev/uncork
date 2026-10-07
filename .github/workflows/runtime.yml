@@ -1,0 +1,174 @@
+# EXPERIMENTAL, manual only. Build an x86_64 new-WoW64 Wine for macOS from
+# CodeWeavers' CrossOver source tarball with runtime/build-wine.sh, then
+# upload the tarball, its checksum and SOURCES.json as workflow artifacts.
+#
+# Nothing here publishes a release or touches runtime/catalog.toml, and
+# Uncork does not install these builds yet. A runtime that is ever published
+# must ship with its exact sources: the CrossOver tarball, runtime/patches
+# and this build script (LGPL-2.1 section 6); SOURCES.json lists them.
+name: runtime (experimental)
+
+on:
+  workflow_dispatch:
+    inputs:
+      crossover_version:
+        description: CrossOver source release to build (crossover-sources-<version>.tar.gz)
+        type: string
+        default: "26.3.0"
+      allow_unpinned:
+        description: Build even when the source tarball or MoltenVK has no pinned SHA-256 (never publish such a build)
+        type: boolean
+        default: false
+
+concurrency:
+  group: runtime-${{ inputs.crossover_version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CROSSOVER_VERSION: ${{ inputs.crossover_version }}
+  ALLOW_UNPINNED: ${{ inputs.allow_unpinned }}
+  # Stopgap: x86_64 libraries from a pinned nixpkgs revision, until the
+  # pinned from-source x86_64 dependency build exists. This is the
+  # 26.05-darwin branch tip dappermint/winecx-gptk builds the same Wine tree
+  # against. nixpkgs 26.05 is the last release with x86_64-darwin, with
+  # binaries until the end of 2026.
+  NIXPKGS_REV: ac62194c3917d5f474c1a844b6fd6da2db95077d
+  MOLTENVK_VERSION: "1.4.2"
+  # TODO(pin): download MoltenVK-macos.tar v1.4.2 yourself, hash it with
+  # `shasum -a 256` and replace TODO. For cross-checking your own result only:
+  # dappermint/winecx-gptk's build.yml records
+  # f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e.
+  MOLTENVK_SHA256: TODO
+
+jobs:
+  build:
+    name: build wine ${{ inputs.crossover_version }} (macos-26, experimental)
+    runs-on: macos-26
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Fails within a minute on an unpinned or mismatched tarball, or on a
+      # patch that does not apply, before any toolchain is installed.
+      - name: fetch, verify and patch the CrossOver source
+        run: |
+          args=(--crossover-version "$CROSSOVER_VERSION" --prepare-only)
+          if [ "$ALLOW_UNPINNED" = true ]; then
+            args+=(--allow-unpinned)
+          fi
+          runtime/build-wine.sh "${args[@]}"
+
+      - name: install Rosetta 2
+        run: |
+          /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+          /usr/bin/arch -x86_64 /usr/bin/true
+          echo "rosetta: ok"
+
+      - name: native build tools (Homebrew)
+        run: |
+          brew install --quiet mingw-w64 bison flex pkgconf freetype
+          # bison and flex are keg-only, and Apple's bison 2.3 is too old for Wine.
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+
+      - name: install Nix
+        uses: DeterminateSystems/nix-installer-action@v23
+        with:
+          determinate: false
+          diagnostic-endpoint: ""
+          extra-conf: |
+            extra-platforms = x86_64-darwin
+
+      - name: x86_64 libraries (nixpkgs)
+        run: |
+          nixpkgs="github:NixOS/nixpkgs/$NIXPKGS_REV"
+          : > "$RUNNER_TEMP/deps-prefixes.txt"
+          # ffmpeg-headless: winedmo needs libavcodec, libavformat and
+          # libavutil only. glib and orc are named because pkg-config resolves
+          # gstreamer's Requires: through these prefixes alone. The plugin
+          # packages are bundled into lib/gstreamer-1.0.
+          for package in freetype gnutls nettle libtasn1 libidn2 p11-kit libunistring gmp \
+            libpng zlib brotli bzip2 ffmpeg-headless glib orc \
+            gst_all_1.gstreamer gst_all_1.gst-plugins-base gst_all_1.gst-plugins-good \
+            gst_all_1.gst-plugins-bad gst_all_1.gst-libav; do
+            # FFmpeg keeps its dylibs in a separate "lib" output. Outputs a
+            # package does not have are skipped; build-wine.sh reports any
+            # library that ends up missing.
+            for output in dev out lib; do
+              if path="$(nix build --no-link --print-out-paths \
+                "$nixpkgs#legacyPackages.x86_64-darwin.$package.$output" 2>/dev/null)"; then
+                echo "$path" >> "$RUNNER_TEMP/deps-prefixes.txt"
+              fi
+            done
+          done
+          sort -u -o "$RUNNER_TEMP/deps-prefixes.txt" "$RUNNER_TEMP/deps-prefixes.txt"
+          cat "$RUNNER_TEMP/deps-prefixes.txt"
+
+      - name: MoltenVK (Khronos release)
+        run: |
+          tarball="$RUNNER_TEMP/MoltenVK-macos.tar"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --silent --show-error \
+            --output "$tarball" \
+            "https://github.com/KhronosGroup/MoltenVK/releases/download/v$MOLTENVK_VERSION/MoltenVK-macos.tar"
+          actual="$(shasum -a 256 "$tarball" | cut -d' ' -f1)"
+          echo "MoltenVK-macos.tar $MOLTENVK_VERSION: sha256 $actual"
+          if [ "$MOLTENVK_SHA256" = TODO ]; then
+            if [ "$ALLOW_UNPINNED" != true ]; then
+              echo "::error::MoltenVK $MOLTENVK_VERSION has no pinned SHA-256; pin MOLTENVK_SHA256 or run with allow_unpinned"
+              exit 1
+            fi
+            echo "::warning::MoltenVK $MOLTENVK_VERSION is not pinned"
+          elif [ "$actual" != "$MOLTENVK_SHA256" ]; then
+            echo "::error::MoltenVK-macos.tar has sha256 $actual; the pin says $MOLTENVK_SHA256"
+            exit 1
+          fi
+          tar -xf "$tarball" -C "$RUNNER_TEMP" MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib
+          mkdir -p "$RUNNER_TEMP/moltenvk/lib"
+          cp "$RUNNER_TEMP/MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib" "$RUNNER_TEMP/moltenvk/lib/"
+          echo "$RUNNER_TEMP/moltenvk" >> "$RUNNER_TEMP/deps-prefixes.txt"
+
+      - name: build (runtime/build-wine.sh)
+        run: |
+          args=(--crossover-version "$CROSSOVER_VERSION")
+          while IFS= read -r prefix; do
+            args+=(--deps-prefix "$prefix")
+          done < "$RUNNER_TEMP/deps-prefixes.txt"
+          if [ "$ALLOW_UNPINNED" = true ]; then
+            args+=(--allow-unpinned)
+          fi
+          # nixpkgs' SDL2 is sdl2-compat, which dlopens SDL3 by name. The
+          # build script bundles only what load commands and Wine's SONAMEs
+          # name, so it would ship without SDL3. No SDL until the
+          # from-source dependency build provides SDL2.
+          runtime/build-wine.sh --without-sdl "${args[@]}"
+
+      - name: upload runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: uncork-wine-${{ inputs.crossover_version }}-x86_64${{ inputs.allow_unpinned && '-unpinned' || '' }}
+          path: |
+            runtime/out/*.tar.xz
+            runtime/out/*.tar.xz.sha256
+            runtime/out/*.SOURCES.json
+          if-no-files-found: error
+          retention-days: 14
+          # Already xz-compressed.
+          compression-level: 0
+
+      - name: upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs-${{ inputs.crossover_version }}
+          path: runtime/work/logs/
+          if-no-files-found: ignore
+          retention-days: 14

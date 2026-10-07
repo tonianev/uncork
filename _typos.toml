@@ -1,0 +1,75 @@
+# typos-cli configuration. Run `typos` from the repository root; CI and
+# `just ci` run it on every change.
+#
+# typos only flags known misspellings, so most project words below would pass
+# anyway. They are listed so the spelling is recorded as intentional and a
+# future dictionary update cannot start flagging them.
+
+[default]
+extend-ignore-re = [
+  # SHA-256 pins, git commit ids (full or abbreviated) and other hex runs.
+  # Short ids like `ba5ef00d` otherwise read as the misspelling "ba".
+  "\\b[0-9a-fA-F]{7,64}\\b",
+  "\\b0x[0-9a-fA-F]+\\b",
+]
+
+[default.extend-words]
+# Keys are lowercase; mapping a word to itself marks the spelling intentional.
+# Uncork and its runtime pieces.
+uncork = "uncork"
+msync = "msync"
+esync = "esync"
+fsync = "fsync"
+ntsync = "ntsync"
+wineserver = "wineserver"
+winemac = "winemac"
+winemetal = "winemetal"
+wineboot = "wineboot"
+winecfg = "winecfg"
+winedmo = "winedmo"
+dxmt = "dxmt"
+dxvk = "dxvk"
+vkd3d = "vkd3d"
+moltenvk = "moltenvk"
+d3dmetal = "d3dmetal"
+gptk = "gptk"
+syswow = "syswow"
+regedit = "regedit"
+# AMD GPU Services (amd_ags_x64.dll), not a misspelling of "ages".
+ags = "ags"
+# Steam client files and switches.
+appmanifest = "appmanifest"
+libraryfolders = "libraryfolders"
+applaunch = "applaunch"
+steamwebhelper = "steamwebhelper"
+lsteamclient = "lsteamclient"
+# Projects and people the docs credit.
+sikarugir = "sikarugir"
+gcenx = "gcenx"
+kegworks = "kegworks"
+wineskin = "wineskin"
+whisky = "whisky"
+dappermint = "dappermint"
+frankea = "frankea"
+marzent = "marzent"
+codeweavers = "codeweavers"
+
+[default.extend-identifiers]
+# Unreal Engine names: typos reads the `UE`/`ue` prefix as a misspelling of "use".
+UE4 = "UE4"
+UE5 = "UE5"
+ue4prereq = "ue4prereq"
+
+[files]
+# Check .github/ (workflows, issue and PR templates) too.
+ignore-hidden = false
+extend-exclude = [
+  ".git",
+  ".claude/",
+  "target/",
+  "dist/",
+  "Cargo.lock",
+  "runtime/work/",
+  "runtime/out/",
+  "runtime/patches/*.patch",
+]

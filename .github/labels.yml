@@ -1,0 +1,70 @@
+# Issue and PR labels for tonianev/uncork. Apply with scripts/sync_labels.sh
+# (which hardcodes the same list; a count check keeps the two in sync).
+# Colors are 6-digit hex without the leading '#'. GitHub caps descriptions at
+# 100 characters.
+#
+# Per-game labels are `game:<profile id>`, the file stem under profiles/.
+# Add one when a profile lands, so game reports and fixes can be grouped.
+- name: good first issue
+  color: 7057ff
+  description: Small, self-contained, verifiable with `cargo test` on any Mac
+- name: help wanted
+  color: 008672
+  description: Open for anyone; often needs an Apple Silicon Mac and a copy of the game
+- name: needs-design
+  color: d4c5f9
+  description: Needs a docs/ or ADR decision before code
+- name: status:claimed
+  color: fbca04
+  description: Someone has commented to claim this; unclaimed again after 14 days of silence
+- name: status:blocked
+  color: b60205
+  description: Waiting on another issue, PR, an upstream fix or an owner decision
+- name: platform:macos
+  color: 0e8a16
+  description: Needs an Apple Silicon Mac to work on or verify
+- name: area:core
+  color: 1d76db
+  description: crates/uncork-core, components, bottles, launch planning
+- name: area:cli
+  color: 1d76db
+  description: crates/uncork, the command-line interface
+- name: area:steam
+  color: 1d76db
+  description: crates/uncork-steam and the Windows Steam client flow
+- name: area:pe
+  color: 1d76db
+  description: crates/uncork-pe, Windows executable inspection
+- name: area:runtime
+  color: 1d76db
+  description: Wine and graphics components, runtime/catalog.toml, runtime/build-wine.sh
+- name: area:profiles
+  color: 1d76db
+  description: Game profiles under profiles/
+- name: area:docs
+  color: 1d76db
+  description: README, CONTRIBUTING and docs/
+- name: area:infra
+  color: 1d76db
+  description: CI, scripts, justfile, releases, dependencies
+- name: kind:bug
+  color: d73a4a
+  description: Something does not work as documented
+- name: kind:feature
+  color: a2eeef
+  description: New capability or change in scope
+- name: kind:game-report
+  color: c5def5
+  description: How a game runs on a given Mac, runtime and backend
+- name: kind:docs
+  color: 0075ca
+  description: Documentation only
+- name: kind:question
+  color: cfd3d7
+  description: Converted from a question; usually moves to Discussions
+- name: game:rise-of-nations-extended-edition
+  color: f9d0c4
+  description: "Rise of Nations: Extended Edition (Steam 287450)"
+- name: game:age-of-empires-2-definitive-edition
+  color: f9d0c4
+  description: "Age of Empires II: Definitive Edition (Steam 813780)"
