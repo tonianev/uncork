@@ -83,7 +83,6 @@ fn run_needs_the_bottles_wine() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn run_dry_run_shows_the_prefix_and_backend() {
     let home = home_with_bottle();
     install_fake_dxmt(&home);
@@ -133,7 +132,6 @@ fn run_dry_run_shows_the_prefix_and_backend() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn run_starts_the_program_and_waits() {
     let home = home_with_bottle();
     let exe = game_in_bottle(&home, "test1");
@@ -155,7 +153,6 @@ fn run_starts_the_program_and_waits() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn play_dry_run_shows_backend_ini_and_command() {
     let home = Home::new();
     home.install_fake_wine();
@@ -182,7 +179,6 @@ fn play_dry_run_shows_backend_ini_and_command() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn play_reports_games_that_are_not_installed() {
     let home = home_with_bottle();
     home.install_fake_steam("test1", &[]);
@@ -191,7 +187,6 @@ fn play_reports_games_that_are_not_installed() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn steam_start_dry_run_prints_the_client_command() {
     let home = home_with_bottle();
     home.install_fake_steam("test1", &[]);
@@ -238,7 +233,6 @@ fn steam_install_asks_before_downloading() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn bottle_env_prints_exports() {
     let home = home_with_bottle();
     home.uncork()
@@ -261,7 +255,6 @@ fn bottle_env_prints_exports() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn bottle_tool_starts_a_wine_program() {
     let home = home_with_bottle();
     home.uncork()
@@ -272,7 +265,6 @@ fn bottle_tool_starts_a_wine_program() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn winetricks_runs_with_the_bottle_environment() {
     let home = home_with_bottle();
     let bin = home.path().join("bin");

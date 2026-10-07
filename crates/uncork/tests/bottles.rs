@@ -442,7 +442,6 @@ fn setup_with_everything_installed_creates_the_bottle() {
 }
 
 #[test]
-#[ignore = "needs phase 2 core"]
 fn setup_starts_an_installed_steam_visibly() {
     let home = Home::new();
     home.install_fake_wine();
