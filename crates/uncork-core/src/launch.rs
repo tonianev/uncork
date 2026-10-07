@@ -187,8 +187,8 @@ pub fn choose_backend(
     todo!()
 }
 
-/// Resolve a profile INI path (`%APPDATA%\\...`, `%LOCALAPPDATA%\\...`,
-/// `%USERPROFILE%\\...`, `%INSTALLDIR%\\...`; `/` or `\\` separators) to a
+/// Resolve a profile INI path (`%APPDATA%\...`, `%LOCALAPPDATA%\...`,
+/// `%USERPROFILE%\...`, `%INSTALLDIR%\...`; `/` or `\` separators) to a
 /// macOS path. `%APPDATA%` is `drive_c/users/<user>/AppData/Roaming`,
 /// `%LOCALAPPDATA%` is `.../AppData/Local`, `%USERPROFILE%` is
 /// `drive_c/users/<user>`, where `<user>` is the bottle's `env.USER` if set,
