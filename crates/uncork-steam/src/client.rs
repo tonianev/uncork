@@ -26,15 +26,22 @@ pub const INSTALLER_SILENT: &str = "/S";
 
 /// Flags Uncork passes every time it starts the client.
 ///
-/// - `-cef-disable-gpu`, `-cef-disable-gpu-compositing`: Steam's web UI
-///   (CEF) renders in software. Its GPU process presents across processes,
-///   which DXMT and `D3DMetal` cannot do and which costs nothing to avoid.
 /// - `-nofriendsui`: skip the friends web view (less CEF work while gaming).
-pub const DEFAULT_CLIENT_ARGS: &[&str] = &[
-    "-cef-disable-gpu",
-    "-cef-disable-gpu-compositing",
-    "-nofriendsui",
-];
+///
+/// Deliberately *not* passed: `-cef-disable-gpu` and
+/// `-cef-disable-gpu-compositing`. Measured on 2026-10-07 (client build
+/// 1788652215, Wine 11.17 with CrossOver 26.3's changes, macOS 27.0.1): with
+/// them every Steam window stays black, because software-composited CEF
+/// output does not cross Wine's process boundary on macOS. Steam's web UI
+/// needs a real Direct3D 11 device instead, which Uncork provides by putting
+/// DXVK next to `steamwebhelper.exe` (see `uncork_core::steam`).
+pub const DEFAULT_CLIENT_ARGS: &[&str] = &["-nofriendsui"];
+
+/// Directory of the 64-bit web helper, relative to the Steam directory.
+/// Uncork places DXVK's `d3d11.dll` and `d3d10core.dll` here (app-local
+/// DLLs win over `system32` for programs in this directory), so the Steam
+/// UI gets a Direct3D 11 device while `system32` stays free for games.
+pub const CEF_DIR: &str = "bin/cef/cef.win64";
 
 /// Flags known to be dead in the 2026 client or harmful; Uncork strips them
 /// from user-supplied argument lists and says so: `-noreactlogin`,
@@ -68,10 +75,7 @@ pub const STRIPPED_CLIENT_ARGS: &[&str] = &[
 ///
 /// let extra = ["-NoFriendsUI", "-nooverlay", "-console"].map(String::from);
 /// let (args, stripped) = client_args(&extra);
-/// assert_eq!(
-///     args,
-///     ["-cef-disable-gpu", "-cef-disable-gpu-compositing", "-nofriendsui", "-console"],
-/// );
+/// assert_eq!(args, ["-nofriendsui", "-console"]);
 /// assert_eq!(stripped, ["-nooverlay"]);
 /// ```
 #[must_use]
@@ -252,7 +256,7 @@ mod tests {
 
     #[test]
     fn duplicate_flags_keep_the_first_occurrence() {
-        let extra = strings(&["-console", "-NoFriendsUI", "-CONSOLE", "-cef-disable-gpu"]);
+        let extra = strings(&["-console", "-NoFriendsUI", "-CONSOLE", "-console"]);
         let (args, _) = client_args(&extra);
         assert_eq!(args, defaults_then(&["-console"]));
     }

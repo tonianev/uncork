@@ -14,13 +14,26 @@
 //!    (Uncork never handles Steam credentials). The first start downloads
 //!    the client and can take 15–25 minutes.
 //!
-//! # Play ([`play`])
+//! # Graphics for the Steam client
 //!
-//! The Steam client always runs on WineD3D (its CEF UI breaks on DXMT and
-//! D3DMetal, which cannot present across processes). A game gets its own
-//! backend by being started *directly* in the same prefix and wineserver
-//! while Steam runs ([`LaunchMode::Direct`]): Steamworks finds the client
-//! through `HKCU\Software\Valve\Steam\ActiveProcess`. Games whose DRM needs
+//! Steam's web UI (CEF) needs a Direct3D 11 device: Wine's OpenGL-based
+//! WineD3D gives Chromium too low a feature level, DXMT refuses the
+//! cross-process swapchains the web helper creates, and software CEF
+//! (`-cef-disable-gpu`) leaves every window black on macOS. DXVK works.
+//! Uncork copies DXVK's 64-bit `d3d11.dll` and `d3d10core.dll` (builtin
+//! marker removed) into the web helper's own directory
+//! ([`uncork_steam::client::CEF_DIR`]) before every start
+//! ([`ensure_client_dxvk`]) and starts the client with
+//! `d3d10core,d3d11=n,b` and `dxgi,d3d9,d3d12=b`. App-local DLLs are found
+//! before `system32`, so games keep `system32`/`syswow64` for their own
+//! backend and the two never conflict.
+//!
+//! # Play
+//!
+//! A game gets its own backend by being started *directly* in the same
+//! prefix and wineserver while Steam runs ([`LaunchMode::Direct`]):
+//! Steamworks finds the client through
+//! `HKCU\Software\Valve\Steam\ActiveProcess`. Games whose DRM needs
 //! Steam to start them use [`LaunchMode::Applaunch`]: `steam.exe -applaunch
 //! <appid>`, where the game inherits the client's environment, so Uncork
 //! restarts Steam with the game's backend environment first.
@@ -64,10 +77,13 @@ pub fn install(
     todo!()
 }
 
-/// The command that starts the Steam client in `bottle` with the base
-/// environment ([`crate::launch::base_env`]), WineD3D for every Direct3D
-/// DLL (`d3d11,dxgi,d3d10core,d3d9,d3d12=b`), the default client flags
-/// ([`uncork_steam::client::default_client_args`]) and `extra` appended.
+/// The command that starts the Steam client in `bottle`: `env_clear`, the
+/// base environment ([`crate::launch::base_env`]) plus the bottle's `env`,
+/// `DXVK_LOG_LEVEL=none`, `WINEDLLOVERRIDES` =
+/// `d3d10core,d3d11=n,b;d3d12,d3d9,dxgi=b;winemenubuilder.exe=d` (rendered
+/// with [`crate::graphics::render_overrides`]), cwd = the Steam directory,
+/// log = `logs/<bottle>-steam-<unix secs>.log`, arguments from
+/// [`uncork_steam::client::client_args`] with `extra` appended.
 ///
 /// # Errors
 /// [`crate::Error::NotFound`] when Steam is not installed in the bottle.
@@ -77,6 +93,36 @@ pub fn client_command(
     extra: &[String],
 ) -> crate::Result<crate::process::CommandSpec> {
     let _ = (bottle, wine, extra);
+    todo!()
+}
+
+/// Put DXVK's 64-bit `d3d11.dll` and `d3d10core.dll` (from the component's
+/// `x86_64-windows`, builtin marker stripped with
+/// [`uncork_pe::strip_builtin_marker`]) into `<steam>/`
+/// [`uncork_steam::client::CEF_DIR`], skipping files that are already
+/// identical. Returns `Ok(false)` without copying when `dxvk` is `None` (the
+/// caller warns that the Steam window will be black), `Ok(true)` otherwise.
+///
+/// # Errors
+/// [`crate::Error::Io`], or [`crate::Error::BrokenComponent`] if the DXVK
+/// component lacks the DLLs.
+pub fn ensure_client_dxvk(
+    steam: &uncork_steam::SteamInstall,
+    dxvk: Option<&crate::component::InstalledComponent>,
+) -> crate::Result<bool> {
+    let _ = (steam, dxvk);
+    todo!()
+}
+
+/// Ask the client to exit (`steam.exe -shutdown`), wait up to `timeout` for
+/// [`is_running`] to report it gone, then stop everything left in the
+/// prefix with `wineserver --kill` (measured: `-shutdown` alone can leave
+/// the client running for over a minute). Not running is a no-op.
+///
+/// # Errors
+/// Command errors.
+pub fn stop(bottle: &Bottle, wine: &WineRuntime, timeout: Duration) -> crate::Result<()> {
+    let _ = (bottle, wine, timeout);
     todo!()
 }
 
@@ -93,7 +139,8 @@ pub fn is_running(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<bool> {
 }
 
 /// Start Steam (`-silent`) if it is not running and wait until
-/// [`is_running`] reports it, polling every 2 s up to `timeout`.
+/// [`is_running`] reports it, polling every 2 s up to `timeout`. Calls
+/// [`ensure_client_dxvk`] first (with the newest installed DXVK).
 ///
 /// # Errors
 /// [`crate::Error::Command`] on timeout, naming the client log.

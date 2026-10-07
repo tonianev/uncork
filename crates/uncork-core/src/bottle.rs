@@ -718,7 +718,10 @@ pub enum ImportMode {
 /// Import an existing Wine prefix (a CrossOver bottle, a Whisky bottle or a
 /// plain `WINEPREFIX`) as bottle `name`. `source` must contain `drive_c` and
 /// `system.reg`. Writes a fresh `uncork.toml` with `imported_from` set; the
-/// prefix is updated by Wine on first launch.
+/// prefix is updated by Wine on first launch. When `drive_c/users` holds
+/// exactly one user other than `Public` and it is not the current `USER`
+/// (CrossOver bottles use `crossover`), the bottle's `env` sets `USER` and
+/// `LOGNAME` to it so Wine keeps using that profile.
 ///
 /// # Errors
 /// [`crate::Error::NotFound`] when `source` is not a prefix,
@@ -758,14 +761,36 @@ pub fn import(
         }
     }
 
-    let config = BottleConfig {
+    let mut config = BottleConfig {
         imported_from: Some(source),
         ..new_config(name, wine_version)
     };
+    if let Some(user) = prefix_user(&dest) {
+        // Wine names the Windows profile after USER. CrossOver bottles use
+        // `crossover`; running as anyone else would start from an empty
+        // AppData (no Steam sign-in, no game settings).
+        if std::env::var("USER").ok().as_deref() != Some(user.as_str()) {
+            config.env.insert("USER".to_owned(), user.clone());
+            config.env.insert("LOGNAME".to_owned(), user);
+        }
+    }
     write_toml_atomic(&dest.join(CONFIG_FILE), &config)?;
     // Keeps an `uncork-state.toml` that came with the prefix: it still
     // describes the files that were copied along with it.
     Bottle::open(&dest)
+}
+
+/// The prefix's Windows user: the only directory in `drive_c/users` other
+/// than `Public` (case-insensitive). `None` when there is not exactly one.
+fn prefix_user(prefix: &Path) -> Option<String> {
+    let entries = std::fs::read_dir(prefix.join("drive_c").join("users")).ok()?;
+    let mut users = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| !name.eq_ignore_ascii_case("public") && !name.starts_with('.'));
+    let user = users.next()?;
+    users.next().is_none().then_some(user)
 }
 
 /// `source`, resolved, if it is a Wine prefix (`drive_c` and `system.reg`).
@@ -1645,6 +1670,39 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
             "cloning leaves the original"
         );
         assert!(!source.join(CONFIG_FILE).exists());
+    }
+
+    #[test]
+    fn import_keeps_the_prefix_windows_user() {
+        let (dir, layout) = home();
+        let source = dir.path().join("CrossOver Steam");
+        fake_prefix(&source);
+        std::fs::create_dir_all(source.join("drive_c/users/Public")).unwrap();
+        std::fs::create_dir_all(source.join("drive_c/users/crossover")).unwrap();
+
+        let bottle = import(&layout, &source, "cx", "11.0", ImportMode::Clone).unwrap();
+
+        assert_eq!(
+            bottle.config.env.get("USER").map(String::as_str),
+            Some("crossover")
+        );
+        assert_eq!(
+            bottle.config.env.get("LOGNAME").map(String::as_str),
+            Some("crossover")
+        );
+    }
+
+    #[test]
+    fn import_leaves_user_alone_when_ambiguous() {
+        let (dir, layout) = home();
+        let source = dir.path().join("two-users");
+        fake_prefix(&source);
+        std::fs::create_dir_all(source.join("drive_c/users/alice")).unwrap();
+        std::fs::create_dir_all(source.join("drive_c/users/bob")).unwrap();
+
+        let bottle = import(&layout, &source, "two", "11.0", ImportMode::Clone).unwrap();
+
+        assert!(!bottle.config.env.contains_key("USER"));
     }
 
     #[test]

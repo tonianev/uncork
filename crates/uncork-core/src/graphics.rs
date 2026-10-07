@@ -647,6 +647,9 @@ pub fn activation(
                 );
             }
             Strategy::PrefixNative => {
+                if backend == Backend::Dxmt {
+                    require_winemetal_bridge(wine)?;
+                }
                 copies.extend(native_copies(backend, component)?);
                 overrides.extend(
                     replaced_dlls(backend)
@@ -831,6 +834,27 @@ fn native_copies(backend: Backend, component: &InstalledComponent) -> crate::Res
         copies.extend(found);
     }
     Ok(copies)
+}
+
+/// With [`Strategy::PrefixNative`], DXMT's Unix half (`winemetal.so`) is
+/// not on any per-process path, so it must already be in the runtime's own
+/// `lib/wine/x86_64-unix` (CrossOver-derived runtimes ship it there).
+fn require_winemetal_bridge(wine: &WineRuntime) -> crate::Result<()> {
+    let bridge = wine
+        .root
+        .join("lib")
+        .join("wine")
+        .join("x86_64-unix")
+        .join("winemetal.so");
+    if bridge.is_file() {
+        Ok(())
+    } else {
+        Err(crate::Error::Unsupported(format!(
+            "Wine {} has no DXMT bridge ({} is missing); use a Wine runtime with the `dxmt` feature",
+            wine.version,
+            bridge.display()
+        )))
+    }
 }
 
 /// A path as an environment value.
@@ -1864,6 +1888,34 @@ mod tests {
         );
     }
 
+    /// A runtime directory under `root` whose `lib/wine/x86_64-unix` has
+    /// DXMT's bridge, as CrossOver-derived runtimes do.
+    fn wine_with_bridge(root: &Path) -> WineRuntime {
+        let unix = root.join("runtime/lib/wine/x86_64-unix");
+        std::fs::create_dir_all(&unix).unwrap();
+        std::fs::write(unix.join("winemetal.so"), "bridge").unwrap();
+        WineRuntime {
+            root: root.join("runtime"),
+            ..wine(&[])
+        }
+    }
+
+    #[test]
+    fn dxmt_in_the_prefix_needs_the_runtime_bridge() {
+        let f = fixture();
+        let dxmt = component(&f.root, ComponentKind::Dxmt, DXMT_FILES);
+        let err = activation(
+            Dxmt,
+            Some(&dxmt),
+            &wine(&[]),
+            &f.bottle,
+            BackendOptions::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, crate::Error::Unsupported(_)), "{err:?}");
+        assert!(err.to_string().contains("winemetal.so"), "{err}");
+    }
+
     #[test]
     fn dxmt_in_the_prefix() {
         let f = fixture();
@@ -1871,7 +1923,7 @@ mod tests {
         let got = activation(
             Dxmt,
             Some(&dxmt),
-            &wine(&[]),
+            &wine_with_bridge(&f.root),
             &f.bottle,
             BackendOptions::default(),
         )
@@ -1924,7 +1976,7 @@ mod tests {
         let got = activation(
             Dxmt,
             Some(&dxmt),
-            &wine(&[]),
+            &wine_with_bridge(&f.root),
             &f.bottle,
             BackendOptions::default(),
         )

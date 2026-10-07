@@ -15,7 +15,8 @@
 //! 1. [`ALLOWED_ENV`] copied from the parent, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`.
 //! 2. Wine basics: `WINEPREFIX`, `WINEDEBUG` (`-all`, or the debug channels).
 //! 3. Bottle performance: `WINEMSYNC=1` when enabled and the runtime has
-//!    `msync`; `ROSETTA_ADVERTISE_AVX=1` when `avx`.
+//!    `msync`; `ROSETTA_ADVERTISE_AVX=1` when `avx`; `MVK_CONFIG_LOG_LEVEL=1`
+//!    (MoltenVK errors only; it otherwise prints device info on every start).
 //! 4. Backend activation env ([`crate::graphics::activation`]).
 //! 5. Bottle `env`, then profile `env`, then command-line `--env`.
 //!
