@@ -14,7 +14,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 ///
 /// First time? Run `uncork setup`, then `uncork play rise-of-nations`.
 #[derive(Debug, Parser)]
-#[command(name = "uncork", version, propagate_version = true, max_term_width = 100)]
+#[command(
+    name = "uncork",
+    version,
+    propagate_version = true,
+    max_term_width = 100
+)]
 pub struct Cli {
     /// Print machine-readable JSON instead of text (list, info and inspect commands).
     #[arg(long, global = true)]

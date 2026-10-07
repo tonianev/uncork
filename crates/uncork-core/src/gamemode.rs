@@ -43,7 +43,13 @@ pub fn info_plist(name: &str, bundle_id: &str) -> String {
 ///
 /// # Errors
 /// I/O or command errors.
-pub fn prepare_bundle(layout: &Layout, id: &str, name: &str, plan: &LaunchPlan, launcher: &Path) -> crate::Result<PathBuf> {
+pub fn prepare_bundle(
+    layout: &Layout,
+    id: &str,
+    name: &str,
+    plan: &LaunchPlan,
+    launcher: &Path,
+) -> crate::Result<PathBuf> {
     let _ = (layout, id, name, plan, launcher);
     todo!()
 }
@@ -52,5 +58,8 @@ pub fn prepare_bundle(layout: &Layout, id: &str, name: &str, plan: &LaunchPlan, 
 /// `/usr/bin/open -n -W <bundle>`.
 #[must_use]
 pub fn open_command(bundle: &Path) -> crate::process::CommandSpec {
-    crate::process::CommandSpec::new("/usr/bin/open").arg("-n").arg("-W").arg(bundle)
+    crate::process::CommandSpec::new("/usr/bin/open")
+        .arg("-n")
+        .arg("-W")
+        .arg(bundle)
 }

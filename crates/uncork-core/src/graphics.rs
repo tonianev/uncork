@@ -2415,7 +2415,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs crate::config::write_toml_atomic and uncork_pe::strip_builtin_marker (other modules)"]
     fn apply_copies_installs_strips_and_records() {
         let f = fixture();
         let mut bottle = f.bottle.clone();
@@ -2466,7 +2465,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs crate::config::write_toml_atomic (other module)"]
     fn apply_copies_is_idempotent() {
         let f = fixture();
         let mut bottle = f.bottle.clone();

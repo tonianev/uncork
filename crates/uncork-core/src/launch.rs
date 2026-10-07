@@ -135,7 +135,11 @@ pub struct PlanContext<'a> {
 ///
 /// # Errors
 /// PE scan, component lookup, or backend errors.
-pub fn plan(ctx: PlanContext<'_>, target: &Target, options: &LaunchOptions) -> crate::Result<LaunchPlan> {
+pub fn plan(
+    ctx: PlanContext<'_>,
+    target: &Target,
+    options: &LaunchOptions,
+) -> crate::Result<LaunchPlan> {
     let _ = (ctx, target, options);
     todo!()
 }
@@ -145,7 +149,11 @@ pub fn plan(ctx: PlanContext<'_>, target: &Target, options: &LaunchOptions) -> c
 ///
 /// # Errors
 /// I/O, registry or spawn errors.
-pub fn execute(plan: &LaunchPlan, bottle: &mut Bottle, wine: &WineRuntime) -> crate::Result<std::process::Child> {
+pub fn execute(
+    plan: &LaunchPlan,
+    bottle: &mut Bottle,
+    wine: &WineRuntime,
+) -> crate::Result<std::process::Child> {
     let _ = (plan, bottle, wine);
     todo!()
 }
@@ -155,7 +163,11 @@ pub fn execute(plan: &LaunchPlan, bottle: &mut Bottle, wine: &WineRuntime) -> cr
 /// share one wineserver configuration (msync is per wineserver: mixing
 /// `WINEMSYNC` values in one prefix makes the second client exit).
 #[must_use]
-pub fn base_env(bottle: &Bottle, wine: &WineRuntime, wine_debug: Option<&str>) -> BTreeMap<String, String> {
+pub fn base_env(
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    wine_debug: Option<&str>,
+) -> BTreeMap<String, String> {
     let _ = (bottle, wine, wine_debug);
     todo!()
 }
@@ -165,7 +177,11 @@ pub fn base_env(bottle: &Bottle, wine: &WineRuntime, wine_debug: Option<&str>) -
 ///
 /// # Errors
 /// As [`plan`].
-pub fn choose_backend(ctx: PlanContext<'_>, target: &Target, options: &LaunchOptions) -> crate::Result<(Backend, String)> {
+pub fn choose_backend(
+    ctx: PlanContext<'_>,
+    target: &Target,
+    options: &LaunchOptions,
+) -> crate::Result<(Backend, String)> {
     let _ = (ctx, target, options);
     todo!()
 }

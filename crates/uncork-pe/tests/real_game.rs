@@ -8,7 +8,6 @@
 use std::path::Path;
 
 #[test]
-#[ignore = "needs UNCORK_TEST_GAME_EXE pointing at an installed game"]
 fn scan_real_game() {
     let Some(exe) = std::env::var_os("UNCORK_TEST_GAME_EXE") else {
         eprintln!("UNCORK_TEST_GAME_EXE is not set; nothing to scan");

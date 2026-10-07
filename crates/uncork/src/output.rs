@@ -53,7 +53,14 @@ pub struct TerminalProgress {
 
 impl uncork_core::download::Progress for TerminalProgress {
     fn start(&mut self, label: &str, total: Option<u64>) {
-        let _ = (&self.label, self.total, self.done, self.last_percent, label, total);
+        let _ = (
+            &self.label,
+            self.total,
+            self.done,
+            self.last_percent,
+            label,
+            total,
+        );
         todo!()
     }
 

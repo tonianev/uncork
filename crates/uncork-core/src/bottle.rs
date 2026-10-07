@@ -1382,7 +1382,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn create_initializes_a_prefix() {
         let (dir, layout) = home();
         let wine = fake_wine(dir.path(), BOOT_OK);
@@ -1453,7 +1452,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn create_gives_up_on_a_hung_wineboot() {
         let (dir, layout) = home();
         let wine = fake_wine(dir.path(), BOOT_HANGS);
@@ -1504,7 +1502,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn create_reports_a_failing_wineboot() {
         let (dir, layout) = home();
         let wine = fake_wine(dir.path(), BOOT_FAILS);
@@ -1521,7 +1518,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn apply_registry_imports_and_cleans_up() {
         let (dir, layout) = home();
         let wine = fake_wine(dir.path(), BOOT_OK);
@@ -1553,7 +1549,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn open_reads_both_files() {
         let (_dir, layout) = home();
         let mut bottle = Bottle {
@@ -1577,7 +1572,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn open_reports_missing_and_invalid_configs() {
         let (_dir, layout) = home();
         let path = layout.bottle_dir("x");
@@ -1599,7 +1593,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn list_returns_readable_bottles_by_name() {
         let (_dir, layout) = home();
         for name in ["zeta", "alpha", "Mid"] {
@@ -1623,7 +1616,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn import_clones_a_prefix() {
         let (dir, layout) = home();
         let source = dir.path().join("CrossOver Bottle");
@@ -1656,7 +1648,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn import_moves_a_prefix_and_keeps_its_state() {
         let (dir, layout) = home();
         let source = dir.path().join("old-uncork-bottle");
@@ -1676,7 +1667,6 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
     }
 
     #[test]
-    #[ignore = "needs crate::config, crate::process and crate::registry"]
     fn delete_stops_the_wineserver_first() {
         let (dir, layout) = home();
         let wine = fake_wine(dir.path(), BOOT_OK);

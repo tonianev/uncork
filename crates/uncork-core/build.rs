@@ -24,11 +24,16 @@ fn main() {
         let canonical = path.canonicalize().expect("profile path canonicalizes");
         let name = path.file_name().expect("file name").to_string_lossy();
         println!("cargo::rerun-if-changed={}", canonical.display());
-        writeln!(out, "    ({name:?}, include_str!({:?})),", canonical.display().to_string())
-            .expect("write to String");
+        writeln!(
+            out,
+            "    ({name:?}, include_str!({:?})),",
+            canonical.display().to_string()
+        )
+        .expect("write to String");
     }
     out.push(']');
 
-    let dest = PathBuf::from(std::env::var_os("OUT_DIR").expect("set by cargo")).join("builtin_profiles.rs");
+    let dest = PathBuf::from(std::env::var_os("OUT_DIR").expect("set by cargo"))
+        .join("builtin_profiles.rs");
     std::fs::write(&dest, out).unwrap_or_else(|e| panic!("cannot write {}: {e}", dest.display()));
 }

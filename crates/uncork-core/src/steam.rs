@@ -71,7 +71,11 @@ pub fn install(
 ///
 /// # Errors
 /// [`crate::Error::NotFound`] when Steam is not installed in the bottle.
-pub fn client_command(bottle: &Bottle, wine: &WineRuntime, extra: &[String]) -> crate::Result<crate::process::CommandSpec> {
+pub fn client_command(
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    extra: &[String],
+) -> crate::Result<crate::process::CommandSpec> {
     let _ = (bottle, wine, extra);
     todo!()
 }
@@ -93,7 +97,12 @@ pub fn is_running(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<bool> {
 ///
 /// # Errors
 /// [`crate::Error::Command`] on timeout, naming the client log.
-pub fn ensure_running(layout: &Layout, bottle: &Bottle, wine: &WineRuntime, timeout: Duration) -> crate::Result<()> {
+pub fn ensure_running(
+    layout: &Layout,
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    timeout: Duration,
+) -> crate::Result<()> {
     let _ = (layout, bottle, wine, timeout);
     todo!()
 }
@@ -106,7 +115,12 @@ pub fn ensure_running(layout: &Layout, bottle: &Bottle, wine: &WineRuntime, time
 /// # Errors
 /// [`crate::Error::NotFound`] if the game is not installed (hint: install it
 /// in Steam first), plus planning errors.
-pub fn plan_game(ctx: PlanContext<'_>, appid: u32, args: &[String], options: &LaunchOptions) -> crate::Result<LaunchPlan> {
+pub fn plan_game(
+    ctx: PlanContext<'_>,
+    appid: u32,
+    args: &[String],
+    options: &LaunchOptions,
+) -> crate::Result<LaunchPlan> {
     let _ = (ctx, appid, args, options);
     todo!()
 }
