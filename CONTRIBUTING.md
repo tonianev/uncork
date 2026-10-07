@@ -9,10 +9,10 @@ This document covers how to set up a development machine, what to run before you
 | Xcode Command Line Tools | Linker and the macOS SDK. Full Xcode is not needed. | `xcode-select --install` |
 | rustup | Installs the pinned toolchain from `rust-toolchain.toml` (Rust 1.99.0 with rustfmt and clippy) on your first cargo command. If you installed rustup through Homebrew (keg-only), add `/opt/homebrew/opt/rustup/bin` to `PATH`. | https://rustup.rs |
 | just | Task runner for `just ci`. | `brew install just` |
-| cargo-nextest, cargo-deny, typos-cli, cargo-machete | Optional locally; CI runs them all. | `brew install cargo-nextest cargo-deny typos-cli && cargo install cargo-machete --locked` |
+| cargo-nextest, cargo-deny, typos-cli, cargo-machete, shellcheck | Optional locally (`just ci` skips a missing one with an install hint); CI runs them all. | `brew install cargo-nextest cargo-deny typos-cli shellcheck && cargo install cargo-machete --locked` |
 | Rosetta 2 | Only for running real games. The test suite never starts Wine. | `softwareupdate --install-rosetta --agree-to-license` |
 
-Running games needs an Apple Silicon Mac. The test suite does not: it never starts Wine or downloads anything.
+Running games needs an Apple Silicon Mac with macOS 26 or later, the oldest release the catalog's Wine runtime is built for. The test suite does not: it never starts Wine or downloads anything.
 
 ## Build and run
 
@@ -34,12 +34,17 @@ cargo test -p uncork-core
 |---|---|
 | Format | `cargo fmt --all -- --check` |
 | Lint | `cargo clippy --workspace --all-targets --locked --profile ci -- -D warnings` |
-| Tests | `cargo nextest run --workspace --locked --cargo-profile ci` (falls back to `cargo test` when nextest is missing) |
+| Tests | `cargo nextest run --workspace --locked --cargo-profile ci --no-fail-fast` (falls back to `cargo test` when nextest is missing) |
 | Doctests | `cargo test --doc --workspace --locked --profile ci` |
-| Docs | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --profile ci` |
+| Docs | `cargo doc --workspace --no-deps --locked --profile ci`, with `RUSTDOCFLAGS="-D warnings"` set by the justfile |
+| Catalog pins | `scripts/check_catalog.sh` (offline lint of `runtime/catalog.toml`) |
+| Labels | `scripts/sync_labels.sh --check` (`.github/labels.yml` matches the script) |
+| Shell scripts | `shellcheck -x scripts/*.sh runtime/*.sh`, then `scripts/test_build_wine.sh` (offline tests of `runtime/build-wine.sh`) |
 | Unused dependencies | `cargo machete` |
 | Spelling | `typos` |
-| Licenses, advisories, banned crates | `cargo deny check` (see `deny.toml`) |
+| Licenses, advisories, banned crates | `cargo deny --all-features check` (see `deny.toml`) |
+
+`just catalog-verify` downloads every catalog archive and checks it against its pin; it is for maintainers and is not part of `just ci`.
 
 The workspace lints are strict: `unsafe_code` is denied, `missing_docs` is a warning and every warning is an error in CI. A public item without a doc comment fails the build.
 
@@ -85,7 +90,8 @@ cargo run -p uncork -- play rise-of-nations --wine-debug +loaddll
 
 - Keep `UNCORK_HOME` on an APFS volume. Bottle import clones with APFS (`cp -c`), and exFAT has no symbolic links, which a Wine prefix's `dosdevices/` directory is made of.
 - Every launch writes a log to `$UNCORK_HOME/logs/<bottle>-<program>-<unix seconds>.log`. `--wine-debug <channels>` turns on Wine debug channels and the backends' own logs for that launch.
-- To reuse an existing Steam login across branches, import the bottle instead of signing in again: `uncork bottle import "$OLD_HOME/bottles/steam" --name steam` clones it.
+- To reuse an existing Steam login across branches, import the bottle instead of signing in again: `uncork bottle import "$OLD_HOME/bottles/steam" --name steam` clones it. A CrossOver Steam bottle works the same way (`uncork bottle import "$HOME/Library/Application Support/CrossOver/Bottles/Steam" --name steam`); the clone runs with `USER=crossover` so Steam finds its sign-in, and CrossOver's copy is not touched.
+- `uncork play <game> --dry-run` and `uncork steam start --dry-run` print the exact commands without starting anything.
 - Stop a bottle before deleting it: `uncork bottle kill steam`, then `uncork bottle delete steam`.
 - Steam's own logs under `drive_c/Program Files (x86)/Steam/logs/` contain your account name. Scrub them before attaching them to an issue.
 
@@ -93,7 +99,7 @@ cargo run -p uncork -- play rise-of-nations --wine-debug +loaddll
 
 These apply to every change under `crates/`.
 
-1. The doc comments are the specification. A change in behavior changes the doc comment in the same commit; a reviewer reads the diff of the docs first.
+1. The doc comments are the specification. A change in behavior changes the doc comment in the same commit, and the user-facing docs in `docs/` that describe it; a reviewer reads the diff of the docs first. A change to help text in `crates/uncork/src/cli.rs` regenerates [docs/CLI.md](docs/CLI.md).
 2. No `unsafe` (denied workspace-wide). No `unwrap()` or `expect()` in library code except on an invariant documented next to it.
 3. Errors carry context: the path, the command or the component involved and, where there is one, the command that fixes it. Libraries use `thiserror`; only the `uncork` binary uses `anyhow`.
 4. No silent fallbacks. A backend the user asked for that is not installed or cannot run the game is an error naming the install command.
@@ -110,7 +116,7 @@ These apply to every change under `crates/`.
 |---|---|
 | Game profile (`profiles/`) | Welcome anytime. `cargo test -p uncork-core` passes; tested hardware and commit in the description. |
 | Compatibility report | Welcome anytime, as a "Game report" issue or a `[[compat.reports]]` entry in a profile PR. First-hand only. |
-| Docs | Welcome anytime. Run `typos`. Every non-obvious technical claim cites a primary source. |
+| Docs | Welcome anytime. Run `typos`. Every non-obvious technical claim cites a primary source; a measurement says when, on what hardware and with which versions it was made. |
 | Tests | Welcome anytime. |
 | Catalog pin (`runtime/catalog.toml`) | Follow [docs/RUNTIME.md](docs/RUNTIME.md#updating-a-pin). The SHA-256 must be computed by the author from the downloaded file. |
 | Code | Open an issue first so the change can be matched to a milestone in [docs/ROADMAP.md](docs/ROADMAP.md). The PR includes tests. |

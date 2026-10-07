@@ -7,7 +7,7 @@ This document is the map of the Uncork codebase. It says what each crate and mod
 Uncork is an orchestrator. It never translates an instruction or a draw call itself ([ADR 0002](adr/0002-orchestrate-not-reimplement.md)). Its work is:
 
 1. Supply: download pinned, SHA-256-verified builds of Wine, DXMT and DXVK from their publishers, or import D3DMetal from the user's own copy of Apple's Game Porting Toolkit.
-2. Bottles: create Wine prefixes with known registry settings, install the Windows Steam client into one.
+2. Bottles: create Wine prefixes with known registry settings or import existing ones, and install the Windows Steam client into one.
 3. Decide: inspect a game's PE files, look up its profile, and choose a graphics backend.
 4. Launch: build one exact command with a constructed environment, put the backend's files in place, spawn the Wine loader directly, and log its output.
 
@@ -21,7 +21,7 @@ Steps 3 and 4 produce plain data (a `LaunchPlan`) before anything runs. `uncork 
 | Uncork never downloads, bundles or mirrors D3DMetal or the Steam client. | Catalog validation rejects `d3dmetal` entries; Steam's installer is fetched from Valve at run time. [LEGAL.md](LEGAL.md) |
 | Wine processes get a constructed environment, not the user's shell environment. | `launch::ALLOWED_ENV`, `process::CommandSpec::env_clear` |
 | Programs are spawned directly, never through `/bin/sh`, `env`, `nohup` or `arch`. | `process::spawn`; SIP purges `DYLD_*` when a protected binary starts ([Apple](https://developer.apple.com/library/archive/documentation/Security/Conceptual/System_Integrity_Protection_Guide/RuntimeProtections/RuntimeProtections.html)) |
-| The Steam client always runs on WineD3D. | `steam::client_command` overrides every Direct3D DLL to builtin |
+| The Steam client's web helper gets DXVK's `d3d11` and `d3d10core` from its own directory, and every Steam process gets `dxgi`, `d3d9` and `d3d12` from Wine, never from a game's backend. | `steam::ensure_client_dxvk`, `steam::client_command` |
 | No silent fallback. A fixed backend that is missing or cannot run the program is an error that names the install command. | `launch::plan` |
 | No async runtime, no OpenSSL. | `deny.toml` bans `tokio` and `openssl-sys` |
 
@@ -39,7 +39,7 @@ Steps 3 and 4 produce plain data (a `LaunchPlan`) before anything runs. `uncork 
 
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `crates/uncork` | The `uncork` binary. `cli.rs` describes the command-line surface (clap derive), `commands.rs` dispatches, `output.rs` prints tables, JSON, errors and download progress. The only crate that uses `anyhow`. | all three below |
+| `crates/uncork` | The `uncork` binary. `cli.rs` describes the command-line surface (clap derive; [CLI.md](CLI.md) is its help output), `commands/` holds one handler module per command group plus the Game Mode bundle launcher (`commands/exec.rs`), `output.rs` prints tables, JSON, errors and download progress. The only crate that uses `anyhow`. | all three below |
 | `crates/uncork-core` | The engine: data layout, catalog, downloads, components, Wine commands, bottles, registry, graphics backends, profiles, INI edits, launch planning, process spawning, Steam orchestration, Game Mode bundles, host checks. | `uncork-pe`, `uncork-steam` |
 | `crates/uncork-pe` | Reads Windows PE files without running them: machine, bitness, large-address-aware and NX flags, imports, Wine's builtin marker; scans a game directory for the graphics API it uses. | none |
 | `crates/uncork-steam` | Facts about the Windows Steam client with no Wine dependency: a KeyValues (`.vdf`/`.acf`) parser, library and app manifests, Windows-to-prefix path mapping, client argument lists. | none |
@@ -101,7 +101,7 @@ The catalog, `runtime/catalog.toml`, is compiled into the binary. Each entry pin
 
 1. Download to `cache/downloads/<sha256[..16]>-<file name>`, hashing while streaming. A cached file that already verifies is reused without network access. The download is written to `<file>.part` and renamed only after the hash matches.
 2. Extract into `components/<kind>/.staging-<version>`. Extraction rejects absolute paths, `..`, entries outside `strip_prefix`, symlinks that are absolute or resolve outside the destination, hard links and device files.
-3. Check the layout (`component::validate_layout`; the required paths are listed in [RUNTIME.md](RUNTIME.md#required-component-layouts)).
+3. Normalize the layout (DXVK's `x64`/`x32` become `x86_64-windows`/`i386-windows`; a Wine tree nested up to three levels down, such as winecx-gptk's `Libraries/Wine`, is moved to the top), then check it (`component::validate_layout`; the required paths are listed in [RUNTIME.md](RUNTIME.md#required-component-layouts)).
 4. Write `component.toml`, recording the source URL and verified hash, the license and the source-code location.
 5. Rename the staging directory to `components/<kind>/<version>`. A failure at any step removes the staging directory.
 
@@ -134,7 +134,7 @@ Registry defaults, all under `HKEY_CURRENT_USER\Software\Wine` (key names from [
 | `Mac Driver\EnableAppNap` | `n` | App Nap throttles a backgrounded Steam client |
 | `Version` | `win10` by default | What Steam and most games expect |
 
-`uncork bottle import <path>` brings in an existing prefix (a CrossOver or Whisky bottle, or any `WINEPREFIX` with `drive_c` and `system.reg`). The default clones it with APFS (`/bin/cp -c -R`): instant, no extra space until files change, the original untouched. `--move` renames it instead.
+`uncork bottle import <path>` brings in an existing prefix (a CrossOver or Whisky bottle, or any `WINEPREFIX` with `drive_c` and `system.reg`). The default clones it with APFS (`/bin/cp -c -R`): no extra space until files change, the original untouched (a 21 GB CrossOver bottle took about 6 s on 2026-10-07). Where cloning is impossible it falls back to a plain copy; `--move` renames it instead. Wine names the Windows profile after `USER`, so when the prefix has exactly one user directory other than `Public` and it differs from your macOS user name (CrossOver bottles use `crossover`), the new `uncork.toml` sets `USER` and `LOGNAME` to it in the bottle's `env`; otherwise Steam's sign-in and the games' settings in `AppData` would not be found. The imported bottle runs with the newest installed Wine; Wine updates the prefix on first launch.
 
 ## Graphics backends
 
@@ -173,16 +173,18 @@ The scan (`uncork_pe::scan_game`) reads the import and delay-load tables of the 
 
 Backends are chosen per process so the Steam client and a game run side by side in one prefix with different backends ([ADR 0003](adr/0003-per-process-backends.md)). How a backend is wired in depends on what the Wine runtime supports, declared by its feature tags. `graphics::strategy_for` picks the first that applies:
 
-| Strategy | Runtime feature | Mechanism | Scope |
-|---|---|---|---|
-| `Builtin` | any | WineD3D is Wine's own; nothing to do | |
-| `RendererEnv` | `renderer-dllpath` | Set `WINEDLLPATH_DXMT`, `WINEDLLPATH_DXVK` or `WINEDLLPATH_D3DMETAL` to the backend directory; Wine searches it before its own builtins | One process and its children |
-| `DllPathPrepend` | `dllpath-prepend` | Set `WINEDLLPATH_PREPEND` to the backend directory | One process and its children |
-| `PrefixNative` | neither | Copy the backend's DLLs, with Wine's builtin marker removed, into `system32` and `syswow64`, and set `<dlls>=n,b` for the process that should use them; every other process gets `<dlls>=b` | Per process via overrides; files are prefix-wide |
+| Strategy | Runtime feature | Mechanism | Scope | Runtimes |
+|---|---|---|---|---|
+| `Builtin` | any | WineD3D is Wine's own; nothing to do | | All |
+| `RendererEnv` | `renderer-dllpath` | Set `WINEDLLPATH_DXMT`, `WINEDLLPATH_DXVK` or `WINEDLLPATH_D3DMETAL` to the backend directory; Wine searches it before its own builtins | One process and its children | None in the catalog (Sikarugir's engines have the variables) |
+| `DllPathPrepend` | `dllpath-prepend` | Set `WINEDLLPATH_PREPEND` to the backend directory | One process and its children | Uncork's planned runtime (M2) |
+| `PrefixNative` | neither | Copy the backend's DLLs, with Wine's builtin marker removed, into `system32` and `syswow64`, and set `<dlls>=n,b` for the process that should use them; every other process gets `<dlls>=b` | Per process via overrides; files are prefix-wide | `winecx-gptk-4.7.3`, the catalog's only runtime |
+
+So today every DXMT and DXVK launch uses `PrefixNative`. For Rise of Nations the plan copies DXMT's `d3d11`, `dxgi` and `d3d10core` into both `system32` and `syswow64` and sets `d3d10core,d3d11,dxgi=n,b` (plus the profile's `d3dcompiler_46,d3dcompiler_47=n,b`) and `d3d10,d3d12,d3d12core=b`; on 2026-10-07 `lsof` showed the game holding the `syswow64` copies while the Steam client, in the same bottle, held its app-local DXVK. With `PrefixNative`, DXMT also needs its Unix bridge in the runtime itself (`lib/wine/x86_64-unix/winemetal.so`, which winecx-gptk ships); a runtime without it is an error.
 
 Plain `WINEDLLPATH` cannot do this job: Wine's loader searches its own DLL directory before `WINEDLLPATH`, so a builtin can never be overridden that way ([loader.c, wine-11.19](https://github.com/wine-mirror/wine/blob/wine-11.19/dlls/ntdll/unix/loader.c)). The Sikarugir 11.0 engine adds the `WINEDLLPATH_<RENDERER>` variables ([Sikarugir#283](https://github.com/Sikarugir-App/Sikarugir/issues/283)); `WINEDLLPATH_PREPEND` is a patch in Uncork's planned runtime ([RUNTIME.md](RUNTIME.md#patch-queue)).
 
-`PrefixNative` is refused for D3DMetal: its PE files are forwarders to a Unix library, and removing the builtin marker loses the Unix half. In every strategy, DXMT's `winemetal.dll` is also copied, marker intact, into `system32` (from `x86_64-windows`) and `syswow64` (from `i386-windows`), as DXMT's installation guide requires ([DXMT guide](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks)). Copies are skipped when the destination already has the same SHA-256 and are recorded in `uncork-state.toml`. Wine's placeholder DLLs are never deleted: a builtin whose placeholder is missing fails to load.
+`PrefixNative` is refused for D3DMetal: its PE files are forwarders to a Unix library, and removing the builtin marker loses the Unix half. With the catalog's runtime a D3DMetal launch therefore fails with an error that names the missing feature; importing D3DMetal works, but using it waits for a runtime with `renderer-dllpath` or `dllpath-prepend`. In every strategy, DXMT's `winemetal.dll` is also copied, marker intact, into `system32` (from `x86_64-windows`) and `syswow64` (from `i386-windows`), as DXMT's installation guide requires ([DXMT guide](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks)). Copies are skipped when the destination already has the same SHA-256 and are recorded in `uncork-state.toml`. Wine's placeholder DLLs are never deleted: a builtin whose placeholder is missing fails to load.
 
 DLLs each backend replaces (the keys of its override entry):
 
@@ -199,9 +201,9 @@ In every strategy, the DLLs that other backends replace and this one does not ar
 
 `launch::plan` turns "run this program in that bottle" into a `LaunchPlan`: one `CommandSpec`, the backend `Activation` (files to copy, environment, overrides), the reason the backend was chosen, the log path and warnings. It reads the bottle and component directories and nothing else, so `--dry-run` and the tests see exactly what would run.
 
-Backend selection, first match wins: `--backend` on the command line; the profile's `graphics.backend` and `fallbacks`; the bottle's `graphics.backend`; `auto`, which scans the executable and calls `recommend`. With `auto`, programs Wine resolves itself (`winecfg`, `regedit`, a `C:\` path) use WineD3D. The command is `<wine> <exe> <profile args> <args>`, run in the executable's directory, with output appended to `logs/<bottle>-<program>-<unix seconds>.log`.
+Backend selection, first match wins: `--backend` on the command line; the profile's `graphics.backend` and `fallbacks`; the bottle's `graphics.backend`; `auto`, which scans the executable and calls `recommend`. Programs Wine resolves itself (`winecfg`, `regedit`; what `uncork bottle tool` starts) use WineD3D unless `--backend` names another; `uncork run` maps a `C:\` path into the prefix and treats it as an executable like any other. The command is `<wine> <exe> <profile args> <args>`, run in the executable's directory, with output appended to `logs/<bottle>-<program>-<unix seconds>.log`.
 
-Warnings in the plan include kernel anti-cheat files, a 32-bit game on a runtime without the `wow64` feature, and a Direct3D 12 game without D3DMetal.
+Warnings in the plan include kernel anti-cheat files; a 32-bit game on a runtime without the `wow64` feature; a Direct3D 12 game without D3DMetal; modules without `NX_COMPAT` beside a 32-bit game (eleven for Rise of Nations, [PERFORMANCE.md](PERFORMANCE.md#dep-and-nx_compat)); a 32-bit executable that is not large-address-aware when the runtime could make it so and nothing sets `WINE_LARGE_ADDRESS_AWARE`; a profile's preferred backend that is not usable; Retina, msync or Windows-version requests that differ from the bottle's; and, for Steam games, an app Steam does not list as fully installed.
 
 ### Environment
 
@@ -211,15 +213,15 @@ Wine processes never inherit the user's shell environment: a stray `DYLD_*`, `WI
 |---|---|
 | 1. Allowlist | `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `__CF_USER_TEXT_ENCODING` copied from the parent; `PATH=/usr/bin:/bin:/usr/sbin:/sbin` |
 | 2. Wine basics | `WINEPREFIX=<bottle>`; `WINEDEBUG=-all`, or the channels from `--wine-debug` |
-| 3. Bottle performance | `WINEMSYNC=1` when `performance.msync` is on and the runtime has `msync`; `ROSETTA_ADVERTISE_AVX=1` when `performance.avx` is on |
+| 3. Bottle performance | `WINEMSYNC=1` when `performance.msync` is on and the runtime has `msync` (both are true by default with the catalog's runtime); `ROSETTA_ADVERTISE_AVX=1` when `performance.avx` is on (a profile's `performance.avx` replaces it for that game); `MVK_CONFIG_LOG_LEVEL=1`, so MoltenVK prints errors only |
 | 4. Backend activation | For example `WINEDLLPATH_DXMT`, `DXMT_LOG_LEVEL=none`, `DXMT_SHADER_CACHE_PATH=<bottle>/cache/dxmt`; `MTL_HUD_ENABLED=1` with `--hud` |
-| 5. User layers | The bottle's `env`, then the profile's `env`, then `--env KEY=VALUE` |
+| 5. User layers | The bottle's `env` (for a bottle imported from CrossOver, `USER=crossover` and `LOGNAME=crossover`), then the profile's `env`, then `--env KEY=VALUE`. A `WINEDLLOVERRIDES` given here is merged per DLL, not passed verbatim |
 
 `WINEDLLOVERRIDES` is layered the same way: `winemenubuilder.exe=d` (keeps Wine from creating menu entries and file associations on the Mac), then the activation's overrides, the bottle's `dll_overrides`, the profile's `dll_overrides`; later layers win per DLL. It renders grouped by value, for example `d3d10core,d3d11,dxgi=n,b;winemenubuilder.exe=d`.
 
 Layers 1 to 3 (`launch::base_env`) are shared by game launches, the Steam client and bottle tools, so every process in a bottle agrees on one wineserver configuration. This matters for msync: every client of a wineserver must use the same `WINEMSYNC` setting, and a mismatched client exits ([wine-msync](https://github.com/marzent/wine-msync)).
 
-`launch::execute` applies the activation's file copies and any registry change the launch needs (for example Retina mode), then spawns the command with `std::process::Command`, which uses `posix_spawn` on macOS.
+`launch::execute` creates the bottle's shader-cache directories and applies the activation's file copies (recorded in `uncork-state.toml`), then spawns the command with `std::process::Command`, which uses `posix_spawn` on macOS, or opens the Game Mode bundle ([below](#game-mode-experimental)). It never touches the registry: Retina mode is a bottle setting that `uncork bottle set` writes, and a launch that asks for a different value gets a warning instead.
 
 ## Profiles
 
@@ -229,10 +231,11 @@ A game profile is a TOML file with the settings that make one title run well: it
 
 Steamworks games need the Windows Steam client running in the same prefix and wineserver as the game; `steam_api` finds it through `HKCU\Software\Valve\Steam\ActiveProcess` ([steam_api](https://partner.steamgames.com/doc/api/steam_api)). [STEAM.md](STEAM.md) is the full description; the architecture in short:
 
-- The client always runs on WineD3D (`d3d11,dxgi,d3d10core,d3d9,d3d12=b`) with its web UI rendered in software (`-cef-disable-gpu -cef-disable-gpu-compositing`). DXMT cannot present across processes, which Chromium's GPU process does ([dxmt#141](https://github.com/3Shain/dxmt/issues/141)); Wine's Mac driver does not implement cross-process child-window Metal swapchains either; and the client stays black on D3DMetal ([Highball#282](https://github.com/gauthierpiarrette/highball/issues/282)).
+- The client's web UI (CEF) needs a Direct3D 11 device. Before every start, `steam::ensure_client_dxvk` copies DXVK's 64-bit `d3d11.dll` and `d3d10core.dll`, marker removed, into `Steam/bin/cef/cef.win64`, next to `steamwebhelper.exe`, and the client runs with `d3d10core,d3d11=n,b` and `d3d12,d3d9,dxgi=b`. App-local DLLs win over `system32`, so the web helper loads DXVK even while a game's DXMT DLLs sit in `system32` and `syswow64`. Software CEF (`-cef-disable-gpu`) leaves every window black, and DXMT cannot present across processes, which Chromium's GPU process does ([dxmt#141](https://github.com/3Shain/dxmt/issues/141)); [ADR 0005](adr/0005-steam-cef-on-app-local-dxvk.md) records the decision.
 - Launch mode `direct` (the default for Steam games): make sure the client runs (`-silent`), then start the game executable directly in the same prefix with its own per-process backend environment.
-- Launch mode `applaunch`, for games whose DRM needs Steam to start them: `steam.exe -applaunch <appid>`. A second `steam.exe` hands its arguments to the running client, and the game inherits the client's environment ([Highball SteamRestart.swift](https://github.com/gauthierpiarrette/highball/blob/main/Sources/HighballKit/SteamRestart.swift)), so Uncork restarts Steam with the game's environment first.
-- Whether the client runs is read with `wine reg query` of the `ActiveProcess` `pid` value, not from `user.reg` on disk, which Wine flushes lazily.
+- Launch mode `applaunch`, for games whose DRM needs Steam to start them: `steam.exe -applaunch <appid>`. A second `steam.exe` hands its arguments to the running client, and the game inherits the client's environment ([Highball SteamRestart.swift](https://github.com/gauthierpiarrette/highball/blob/main/Sources/HighballKit/SteamRestart.swift)), so Uncork restarts Steam with the game's environment first, keeping `d3d10core,d3d11=n,b` for the client's DXVK.
+- Whether the client runs is read with `wine reg query` of the `ActiveProcess` `pid` value, not from `user.reg` on disk, which Wine flushes lazily. A killed client leaves its `pid` behind, so after Uncork kills one (`steam::stop`, `uncork bottle kill`) it writes the `pid` back to 0 (`steam::forget_client`).
+- `steam.exe -shutdown` did not stop the client within 60 s when measured, so `steam::stop` sends it, waits up to a timeout, then runs `wineserver --kill`.
 - Library data comes from `steamapps/libraryfolders.vdf` and `appmanifest_<appid>.acf`, parsed by `uncork-steam`'s own KeyValues parser. Windows paths in those files are mapped into the prefix through `drive_c` and `dosdevices/`. Uncork reads these files and never writes them.
 
 ## Doctor
@@ -255,11 +258,13 @@ Steamworks games need the Windows Steam client running in the same prefix and wi
 | `bottle-wine` | A bottle's Wine version is not installed (warn, per bottle) | `uncork runtime install wine` or `uncork bottle set <name> wine=<v>` |
 | `crossover` | CrossOver is installed (info: its bottles can be imported) | `uncork bottle import` |
 
+Two gaps between the checks and reality: `macos-version` accepts macOS 14, but the catalog's Wine runtime is built for macOS 26.0 and later (`minos` in its Mach-O load commands); and `dxvk-installed` calls DXVK an optional fallback, although the Steam client needs it for its window ([STEAM.md](STEAM.md#graphics-steam-runs-on-dxvk)).
+
 Rosetta is detected by running an x86-64 binary, not with `pgrep oahd`: `oahd` starts on demand, so its absence proves nothing. Upgrading to macOS 27 does not restore Rosetta ([macOS 27 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-27-release-notes)), so a Mac that ran games before the upgrade fails this check after it.
 
 ## Game Mode (experimental)
 
-macOS turns Game Mode on for a frontmost, full-screen app whose bundle declares the games category, and not for a binary spawned from a terminal ([macOS 26 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-26-release-notes), [Apple Support](https://support.apple.com/en-us/105118)). Wine's loader is a bare executable, so a Wine game never qualifies on its own. With `performance.game_mode = true`, Uncork writes `apps/<id>.app` with a games-category `Info.plist`, a copy of the `uncork` binary as its executable and the launch plan as `plan.json`, ad-hoc signs it, and opens it with `/usr/bin/open -n -W`. The launcher `exec`s the Wine loader in place. Whether Game Mode survives that `exec` is unmeasured; it is off by default until it is ([PERFORMANCE.md](PERFORMANCE.md#game-mode)).
+macOS turns Game Mode on for a frontmost, full-screen app whose bundle declares the games category, and not for a binary spawned from a terminal ([macOS 26 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-26-release-notes), [Apple Support](https://support.apple.com/en-us/105118)). Wine's loader is a bare executable, so a Wine game never qualifies on its own. With `--game-mode` or the bottle's `performance.game_mode = true`, the plan carries a `game_mode` entry and `launch::execute`, after putting the backend's files in place, calls `gamemode::prepare_bundle`: it writes `apps/<id>.app` (the profile id, or `<bottle>-<program>` without a profile) with a games-category `Info.plist` (`LSApplicationCategoryType = public.app-category.games`, `LSSupportsGameMode`, `GCSupportsGameMode`), a copy of the running `uncork` binary as `Contents/MacOS/launch` and the plan's command as `Contents/Resources/plan.json`, ad-hoc signs it with `codesign --force --sign -` when anything changed, and opens it with `/usr/bin/open -n -W`. Started by LaunchServices without arguments, the copy finds its own `plan.json` and `exec`s the Wine loader in place (`commands::exec::bundle_launch`; the hidden `uncork __exec <plan.json>` does the same). `applaunch` launches never use a bundle. Whether Game Mode survives that `exec` is unmeasured; it is off by default until it is ([PERFORMANCE.md](PERFORMANCE.md#game-mode)).
 
 ## Errors
 

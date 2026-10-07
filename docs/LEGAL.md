@@ -10,10 +10,10 @@ Uncork's code, game profiles and documentation are dual-licensed under MIT OR Ap
 
 | Component | License or terms | How it reaches your Mac | Uncork redistributes it? |
 |---|---|---|---|
-| Wine runtime, phase 0 (`sikarugir-11.0_1`, `winecx-gptk-4.7.3`) | LGPL-2.1-or-later | `uncork runtime install` downloads the exact archive pinned in `runtime/catalog.toml` from the publisher's GitHub release and verifies its SHA-256 | No |
+| Wine runtime, phase 0 (`winecx-gptk-4.7.3`) | LGPL-2.1-or-later | `uncork runtime install` downloads the exact archive pinned in `runtime/catalog.toml` from the publisher's GitHub release and verifies its SHA-256 | No |
 | Wine runtime, phase 1 (planned, M2) | LGPL-2.1-or-later | Uncork's own CI build, published with its complete corresponding source | Yes, with source ([below](#lgpl-obligations-for-wine-builds)) |
 | DXMT 0.80 | MIT (DXMT `main` is LGPL-2.1-or-later since 2026-04-25) | Downloaded from the 3Shain/dxmt release | No |
-| DXVK-macOS 1.10.3 | Zlib | Downloaded from the Gcenx/DXVK-macOS release | No |
+| DXVK-macOS 1.10.3 | Zlib | Downloaded from the Gcenx/DXVK-macOS release. Two of its DLLs are also copied into the Steam client's directory inside your bottle ([below](#steam)) | No |
 | MoltenVK | Apache-2.0 | Inside the Wine runtime archives that include it | No |
 | D3DMetal (Apple Game Porting Toolkit) | Apple's GPTK license | You download GPTK from Apple and import it with `uncork runtime import-gptk` | Never |
 | `SteamSetup.exe` and the Steam client | Steam Subscriber Agreement | Uncork downloads Valve's installer from Valve's CDN when you install Steam; the client then updates itself from Valve | Never |
@@ -47,8 +47,10 @@ The Steam Subscriber Agreement ([SSA](https://store.steampowered.com/subscriber_
 |---|---|
 | Download `SteamSetup.exe` from Valve's own CDN at install time | Redistribute or mirror the installer or the client |
 | Run Valve's installer and client unmodified, with command-line flags the client accepts | Patch, rename, wrap or replace any Valve binary, including `steamwebhelper.exe` |
+| Put DXVK's `d3d11.dll` and `d3d10core.dll` (Zlib) next to `steamwebhelper.exe` in your bottle, so the client's web UI gets a Direct3D 11 device ([STEAM.md](STEAM.md#graphics-steam-runs-on-dxvk)); Valve's own files stay as they are | Write any other file of the Steam client |
 | Open the client's own window so you sign in yourself | See, store or type your Steam credentials, or automate sign-in |
-| Read `libraryfolders.vdf` and `appmanifest_*.acf` to find installed games | Write Steam's files, or edit `Steam.cfg` to block updates |
+| Read `libraryfolders.vdf` and `appmanifest_*.acf` to find installed games | Write Steam's own data files (`.vdf`, `.acf`), or edit `Steam.cfg` to block updates |
+| After killing the client, set its `HKCU\Software\Valve\Steam\ActiveProcess` `pid` back to 0 in the bottle's registry, as the client itself does on a clean exit | Write any other Steam registry value |
 | Start a game directly in the bottle while your client runs, or ask the client to start it with `-applaunch` | Bridge games to the native macOS Steam client (that needs Valve's Steamworks-SDK-licensed `lsteamclient` and patching the client) |
 
 ## LGPL obligations for Wine builds

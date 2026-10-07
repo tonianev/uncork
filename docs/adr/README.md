@@ -8,8 +8,9 @@ This directory holds Uncork's architecture decision records. An ADR is a short, 
 |---|---|---|---|
 | [0001](0001-license.md) | Licensing of Uncork and of the components it uses | Accepted | 2026-10-07 |
 | [0002](0002-orchestrate-not-reimplement.md) | Orchestrate Wine and the translation layers, do not reimplement them | Accepted | 2026-10-07 |
-| [0003](0003-per-process-backends.md) | Choose the graphics backend per process | Accepted | 2026-10-07 |
+| [0003](0003-per-process-backends.md) | Choose the graphics backend per process | Accepted; decision 2 superseded by 0005 | 2026-10-07 |
 | [0004](0004-runtime-supply.md) | Runtime supply: pinned upstream builds first, Uncork's own CI build next | Accepted | 2026-10-07 |
+| [0005](0005-steam-cef-on-app-local-dxvk.md) | Give the Steam client's web UI app-local DXVK | Accepted | 2026-10-07 |
 
 ## Statuses
 

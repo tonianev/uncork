@@ -17,7 +17,7 @@ M2, M3 and M4 can proceed in parallel once M1 closes. M5 has a hard external dea
 
 ## M0: Scaffold and contracts
 
-The repository, the crate boundaries and every public contract, written as documented signatures, then implemented against those docs with unit tests that use fakes. This milestone.
+The repository, the crate boundaries and every public contract, written as documented signatures, then implemented against those docs with unit tests that use fakes. Implemented; it closes when the boxes below are ticked with evidence. On 2026-10-07 `just ci` passed every step locally on the development Mac (858 tests), `grep -rn 'todo!' crates/` found nothing, and every relative link in the documentation resolved; no hosted CI run is recorded yet.
 
 Deliverables:
 
@@ -36,7 +36,7 @@ Acceptance:
 
 ## M1: End to end on Rise of Nations with a pinned runtime
 
-The CLI does its job on a real Mac with the phase-0 runtime: from nothing to Rise of Nations: Extended Edition on DXMT.
+The CLI does its job on a real Mac with the phase-0 runtime: from nothing to Rise of Nations: Extended Edition on DXMT. In progress.
 
 Deliverables:
 
@@ -44,12 +44,45 @@ Deliverables:
 - First-hand compatibility reports for Rise of Nations: Extended Edition, recorded in its profile.
 - Answers to the open questions marked M1 below, written into [STEAM.md](STEAM.md) and [PERFORMANCE.md](PERFORMANCE.md).
 
+### Progress (2026-10-07)
+
+On the development Mac (MacBook Pro, M5 Max, macOS 27.0.1, Rosetta installed), with a Steam bottle imported from CrossOver rather than a fresh setup. Details and numbers are in the [README](../README.md#verified-on).
+
+| Done | Evidence |
+|---|---|
+| The CLI launches Rise of Nations end to end: `uncork play rise-of-nations --hud` started Steam silently, then the game on DXMT 0.80, in about 44 s | `lsof`: DXMT's `d3d11.dll` and `dxgi.dll` from `syswow64`, builtin `winemetal`, Apple's AGX driver; the profile's INI edit applied |
+| The main menu renders on DXMT: 120 FPS at the display's cap, GPU time 0.48 ms per frame (by hand, same DLLs and overrides) | Metal HUD |
+| Steam's UI works next to the game: client chrome, sign-in and library on app-local DXVK, with msync on | Screen; `lsof` of Steam's GPU process |
+| `--dry-run` shows DXMT, the profile's environment, overrides and INI edit | [ARCHITECTURE.md](ARCHITECTURE.md#activation-strategies) |
+| `doctor`, `runtime install` (from verified archives), `bottle import`, `bottle create`, `run` (32-bit), `steam games`, `bottle kill` | [README](../README.md#verified-on) |
+
+Changes made during the first real runs, now in `main`:
+
+- The catalog's Wine runtime is `winecx-gptk-4.7.3` alone. The Sikarugir engine it used to recommend needs libraries from the Sikarugir app ([RUNTIME.md](RUNTIME.md#phase-0-pinned-upstream-builds)).
+- Install moves a nested Wine tree (`Libraries/Wine`) to the top of the component directory.
+- Steam's web UI runs on app-local DXVK instead of software CEF, which left every window black ([ADR 0005](adr/0005-steam-cef-on-app-local-dxvk.md)).
+- Stopping Steam falls back from `-shutdown`, which did not stop the client within 60 s, to `wineserver --kill`, and the client's `ActiveProcess` `pid` is reset after a kill.
+- Imported CrossOver bottles run with `USER=crossover` and `LOGNAME=crossover`, so Steam's sign-in and the games' settings are found.
+- `MVK_CONFIG_LOG_LEVEL=1` keeps MoltenVK's device banner out of every log.
+- Game Mode bundles are wired into launches (`--game-mode`, `performance.game_mode`), still experimental.
+
+Left for M1:
+
+- A fresh `uncork setup --yes` on a clean Mac with a fresh `UNCORK_HOME`: network downloads, Valve's installer, the first sign-in and update, and `doctor` without failures there.
+- A 2-hour Steam session.
+- A full match: the skirmish, tutorial, audio, lobby browser and alt-tab items below.
+- The Metal HUD benchmark on DXMT and on WineD3D.
+- Game Mode through an app bundle ([open question 9](#open-questions)).
+- Setting the profile's `[compat]` status from those reports; until then it stays `untested`.
+
+After M1: Uncork's own runtime (M2), the compatibility database (M3) and the GUI (M4).
+
 Acceptance, on a clean Apple Silicon Mac running macOS 27 with a fresh `UNCORK_HOME`:
 
 - [ ] `uncork doctor` reports no failures after following its own fixes.
 - [ ] `uncork setup --yes` installs the recommended components, creates the `steam` bottle and installs Steam; you sign in in Steam's window; the client reaches its library view and stays usable for a 2-hour session.
-- [ ] `uncork play rise-of-nations --dry-run` shows DXMT and the profile's environment, overrides and INI edit.
-- [ ] `uncork play rise-of-nations` from a cold start starts Steam and the game, and the game reaches its main menu on DXMT.
+- [ ] `uncork play rise-of-nations --dry-run` shows DXMT and the profile's environment, overrides and INI edit. (Seen on the development Mac.)
+- [ ] `uncork play rise-of-nations` from a cold start starts Steam and the game, and the game reaches its main menu on DXMT. (Seen on the development Mac with an imported bottle.)
 - [ ] An 8-AI skirmish runs for 30 minutes or more without a freeze.
 - [ ] A "Learn to Play" tutorial gets past "Setting up animals" (a hang reported under Proton, [ProtonDB](https://www.protondb.com/app/287450)).
 - [ ] Music and sound effects play and the volume slider works.
@@ -65,7 +98,7 @@ A Wine runtime built by Uncork's CI from CrossOver 26.3's LGPL sources plus the 
 Acceptance:
 
 - [ ] `runtime/build-wine.sh --crossover-version 26.3.0` builds on GitHub's hosted arm64 `macos-26` runner from the SHA-256-pinned source tarball and writes `uncork-wine-<version>-x86_64.tar.xz` and `SOURCES.json`.
-- [ ] Patches 1 to 4 of the [patch queue](RUNTIME.md#patch-queue) are applied, each with a test or a recorded manual check.
+- [ ] Patches 1, 2 and 4 of the [patch queue](RUNTIME.md#patch-queue) are applied, each with a test or a recorded manual check; patch 3 only if Steam's UI needs it on this runtime.
 - [ ] Every CI gate in [RUNTIME.md](RUNTIME.md#build-recipe) passes, including the non-empty i386 half and `NX_COMPAT` on every shipped PE file.
 - [ ] Each release publishes the binary archive, `SOURCES.json`, the source tarballs, the patches and the build scripts together.
 - [ ] DXMT is built from `main` at or after [46911d7345](https://github.com/3Shain/dxmt/commit/46911d7345), with its source published the same way.
@@ -124,7 +157,7 @@ What this means for Uncork:
 - CodeWeavers' answer is native ARM64 CrossOver with its own port of FEX, in preview since 2026-07-31 for macOS 26.5 and later, without D3DMetal ([CodeWeavers](https://www.codeweavers.com/blog/mjohnson/2026/7/31/crossover-preview-the-right-to-bear-arm64-on-mac)).
 - Native ARM64 Wine on macOS needs low address space that arm64 processes do not get by default. Third-party reports say an Apple entitlement delivered with a provisioning profile is required; Apple does not document it ([wine-devel](https://list.winehq.org/hyperkitty/list/wine-devel@list.winehq.org/thread/CKG5CEN2BE5VRXZ7O7NX4YUSBH3247WH/)). The project needs a paid Apple Developer membership and an early request to Apple.
 - D3DMetal's Wine glue is x86-64 only. Treat D3DMetal as unavailable on the ARM64 path until Apple says otherwise.
-- `doctor` reports `rosetta-sunset` on macOS 27 and later so users know.
+- `doctor` reports `rosetta-sunset` on macOS 27 and later so users know (seen on macOS 27.0.1, 2026-10-07).
 
 ## Risks
 
@@ -132,9 +165,10 @@ What this means for Uncork:
 |---|---|---|
 | End of Rosetta | Above | M5; `CpuBackend` abstraction; test every beta with `game-test-tool` |
 | ARM64 path gated by Apple | An undocumented entitlement; which developer accounts can get it is unclear | Paid membership, early request, track DXMT's ARM64 work and other ARM64 Wine efforts |
-| Upstream pins disappear or change | The Sikarugir engines are published in one rolling release; `winecx-gptk` has no LICENSE file | Pins fail closed on a hash change; M2 removes the dependency on third-party Wine builds |
+| Upstream pins disappear or change | The catalog has one Wine runtime, `winecx-gptk-4.7.3`, from one publisher, and its repository has no LICENSE file | Pins fail closed on a hash change; M2 removes the dependency on third-party Wine builds |
+| No per-process backend loading in the phase-0 runtime | `winecx-gptk-4.7.3` has neither `renderer-dllpath` nor `dllpath-prepend`: game backends are copied into `system32`/`syswow64`, and D3DMetal cannot be used | Per-launch DLL overrides keep processes apart; the Steam client loads DXVK app-locally; M2 adds `WINEDLLPATH_PREPEND` |
 | x86-64 dependency supply ends | Homebrew Intel at Tier 3 since September 2026; Nixpkgs 26.05 is the last with x86_64-darwin ([Homebrew](https://brew.sh/2025/11/12/homebrew-5.0.0), [NixOS](https://nixos.org/blog/announcements/2026/nixos-2605/)) | A small pinned from-source x86-64 dependency build in M2 |
-| Steam client changes | Wine bug 60334, first-start crashes after updates | Track the issues in [STEAM.md](STEAM.md#known-issues); restart Steam between sessions |
+| Steam client changes | Wine bug 60334, first-start crashes after updates; the client's web UI depends on a Direct3D 11 device from DXVK-macOS 1.10.3, a frozen fork | Track the issues in [STEAM.md](STEAM.md#known-issues); restart Steam between sessions |
 | D3DMetal license | Personal evaluation use, non-commercial distribution only | Import only; never distributed ([LEGAL.md](LEGAL.md#d3dmetal)) |
 | Single maintainer | Whisky was archived when its maintainer stepped away | [GOVERNANCE.md](../GOVERNANCE.md): a second maintainer within three months of v0.2.0 |
 | Name | A Madrid Protocol filing for "UNCORK" in class 9 has unknown status | Formal clearance before a 1.0 release |
@@ -143,18 +177,19 @@ What this means for Uncork:
 
 Each is answered by a hands-on test and recorded in the document named.
 
-| # | Question | Milestone | Answer goes into |
-|---|---|---|---|
-| 1 | Does Steam's web UI render on the phase-0 runtime with software CEF, and does it survive `WINEMSYNC=1`? | M1 | [STEAM.md](STEAM.md) |
-| 2 | Does a direct launch of `riseofnations.exe` work end to end (Steamworks, lobbies, playtime recorded)? | M1 | [STEAM.md](STEAM.md), the profile |
-| 3 | Does DXMT render all of Rise of Nations' geometry-shader permutations, and how does its frame rate compare with WineD3D? | M1 | the profile, [PERFORMANCE.md](PERFORMANCE.md) |
-| 4 | Does Rise of Nations load a non-`NX_COMPAT` DLL at run time, and does that collapse performance on macOS 27? | M1 | [PERFORMANCE.md](PERFORMANCE.md#dep-and-nx_compat) |
-| 5 | Is Wine's builtin DirectMusic enough for the game's audio? | M1 | the profile |
-| 6 | What causes the "Setting up animals" tutorial hang: the C runtime, the UCRT or something else? | M1 | the profile |
-| 7 | Do the WMV intros and the menu background video play with GStreamer and gst-libav? | M1 | the profile |
-| 8 | Does Rise of Nations exceed 2 GiB without large-address-awareness? | M1 | [PERFORMANCE.md](PERFORMANCE.md#large-address-aware) |
-| 9 | Does a games-category wrapper that `exec`s Wine get Game Mode, and with which `CaptureDisplaysForFullscreen` setting? | M1 | [PERFORMANCE.md](PERFORMANCE.md#game-mode) |
-| 10 | In `applaunch` mode, do Steam's own processes still render with a game backend in their environment? | M1 | [STEAM.md](STEAM.md#launch-modes) |
-| 11 | Do GitHub's hosted arm64 runners expose a Metal device usable for DXMT smoke tests? | M2 | [RUNTIME.md](RUNTIME.md) |
-| 12 | Under `game-test-tool` and macOS 28 betas, do `wineserver`, `explorer.exe` and `steamwebhelper.exe` run, and do 32-bit code segments survive? | M5 | this file |
-| 13 | Is the ARM64 cross-architecture capability available to open-source projects distributing with Developer ID? | M5 | this file |
+| # | Question | Milestone | Answer so far (2026-10-07) | Answer goes into |
+|---|---|---|---|---|
+| 1 | Does Steam's web UI render on the phase-0 runtime with software CEF, and does it survive `WINEMSYNC=1`? | M1 | Software CEF: no, every window is black. With app-local DXVK: chrome, sign-in and library render, with `WINEMSYNC=1`; the store page body stays black. A 2-hour session is still to run | [STEAM.md](STEAM.md#graphics-steam-runs-on-dxvk) |
+| 2 | Does a direct launch of `riseofnations.exe` work end to end (Steamworks, lobbies, playtime recorded)? | M1 | Started directly while Steam runs, with the game's own `steam_api` loaded, it reaches the main menu without Steam's launcher. Lobbies and playtime not checked | [STEAM.md](STEAM.md#launch-modes), the profile |
+| 3 | Does DXMT render all of Rise of Nations' geometry-shader permutations, and how does its frame rate compare with WineD3D? | M1 | The main menu renders on DXMT 0.80 at the display's 120 FPS cap. A match and WineD3D not run yet | the profile, [PERFORMANCE.md](PERFORMANCE.md#measured-so-far) |
+| 4 | Does Rise of Nations load a non-`NX_COMPAT` DLL at run time, and does that collapse performance on macOS 27? | M1 | It ships 11 such DLLs, and Uncork warns about them; whether one loads is not checked yet | [PERFORMANCE.md](PERFORMANCE.md#dep-and-nx_compat) |
+| 5 | Is Wine's builtin DirectMusic enough for the game's audio? | M1 | Wine logs that no default General MIDI DLS collection is installed (`err:dmloader:get_system_default_gm_path`), so MIDI music may be silent. Not listened for yet | the profile |
+| 6 | What causes the "Setting up animals" tutorial hang: the C runtime, the UCRT or something else? | M1 | Open | the profile |
+| 7 | Do the WMV intros and the menu background video play with GStreamer and gst-libav? | M1 | Open; the profile skips the intros (`SkipIntroMovies=1`, applied) | the profile |
+| 8 | Does Rise of Nations exceed 2 GiB without large-address-awareness? | M1 | Open | [PERFORMANCE.md](PERFORMANCE.md#large-address-aware) |
+| 9 | Does a games-category wrapper that `exec`s Wine get Game Mode, and with which `CaptureDisplaysForFullscreen` setting? | M1 | Open; one check was inconclusive because the display was asleep | [PERFORMANCE.md](PERFORMANCE.md#game-mode) |
+| 10 | In `applaunch` mode, do Steam's own processes still render with a game backend in their environment? | M1 | Not run. With a DXMT game the web helper would pair DXMT's `dxgi` with DXVK's `d3d11`, which fails to create swapchains, so black Steam windows are expected | [STEAM.md](STEAM.md#launch-modes) |
+| 11 | Do GitHub's hosted arm64 runners expose a Metal device usable for DXMT smoke tests? | M2 | Open | [RUNTIME.md](RUNTIME.md) |
+| 12 | Under `game-test-tool` and macOS 28 betas, do `wineserver`, `explorer.exe` and `steamwebhelper.exe` run, and do 32-bit code segments survive? | M5 | Open | this file |
+| 13 | Is the ARM64 cross-architecture capability available to open-source projects distributing with Developer ID? | M5 | Open | this file |
+| 14 | Why does Steam's embedded store page stay black while the rest of its web UI renders on DXVK? | M1 | Open | [STEAM.md](STEAM.md#known-issues) |
