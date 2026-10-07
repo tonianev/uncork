@@ -21,20 +21,15 @@
 schema = 1
 
 # --- Wine ------------------------------------------------------------------
-
-[[component]]
-kind = "wine"
-version = "sikarugir-11.0_1"
-url = "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS12WineSikarugir11.0_1.tar.xz"
-sha256 = "67e29fb3d74f363af39c69ba11f9b13a79812c5db07cf4748672658e4a200a0e"
-size = 167322744
-archive = "tar.xz"
-license = "LGPL-2.1-or-later"
-source_code = "https://github.com/Sikarugir-App/wine"
-homepage = "https://github.com/Sikarugir-App/Sikarugir"
-features = ["wow64", "dxmt", "d3dmetal", "renderer-dllpath"]
-recommended = true
-notes = "Wine 11.0 for macOS by Gcenx (Sikarugir engine). Per-process DXMT/DXVK/D3DMetal selection."
+# Verified 2026-10-07 on macOS 27.0.1 (M5 Max): `bin/wine --version` prints
+# wine-11.17; lib/wine/x86_64-unix has winemetal.so (DXMT 0.80's bridge);
+# ntdll.so honors WINEMSYNC and WINE_LARGE_ADDRESS_AWARE. The archive nests
+# the tree under Libraries/Wine (normalized on install).
+#
+# Considered and not listed: Gcenx's Sikarugir engines
+# (github.com/Sikarugir-App/Engines) honor per-renderer WINEDLLPATH_* but
+# need FreeType, GnuTLS and MoltenVK from the Sikarugir wrapper app, which
+# Uncork does not supply (docs/RUNTIME.md).
 
 [[component]]
 kind = "wine"
@@ -47,7 +42,8 @@ license = "LGPL-2.1-or-later"
 source_code = "https://github.com/dappermint/winecx"
 homepage = "https://github.com/dappermint/winecx-gptk"
 features = ["wow64", "msync", "dxmt", "d3dmetal", "large-address-aware"]
-notes = "CrossOver 26.3's Wine changes on Wine 11.17, with msync. Backends are copied into the prefix."
+recommended = true
+notes = "Wine 11.17 with CrossOver 26.3's macOS changes and msync; self-contained (FreeType, GnuTLS, MoltenVK 1.4.2, GStreamer, DXMT 0.80 bridge)."
 
 # --- Graphics --------------------------------------------------------------
 
