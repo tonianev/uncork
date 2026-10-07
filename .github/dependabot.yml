@@ -1,0 +1,38 @@
+# Dependabot: weekly grouped updates for Cargo and GitHub Actions. A 7-day
+# cooldown keeps brand-new releases out until they have been public for a
+# week. The pinned Rust toolchain (rust-toolchain.toml) and the runtime
+# components (runtime/catalog.toml) are bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels:
+      - area:infra
+    groups:
+      rust-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    labels:
+      - area:infra
+    groups:
+      github-actions:
+        patterns:
+          - "*"

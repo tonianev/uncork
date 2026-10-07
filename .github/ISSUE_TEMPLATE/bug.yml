@@ -1,0 +1,82 @@
+name: Bug report
+description: Uncork itself does something wrong (setup, a command, a crash, a wrong setting)
+labels: ["kind:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Run `uncork doctor` first: it checks Rosetta, the installed components and your bottles, and often names the fix.
+        If a game starts but runs badly, the Game report template is the better fit.
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: Apple menu > About This Mac, or `sw_vers -productVersion`.
+      placeholder: "27.0.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: chip
+    attributes:
+      label: Chip
+      options:
+        - Apple M1 family
+        - Apple M2 family
+        - Apple M3 family
+        - Apple M4 family
+        - Apple M5 or newer
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Uncork version
+      description: Output of `uncork --version`, or `git rev-parse --short HEAD` if you built from source.
+      placeholder: "uncork 0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: uncork doctor output
+      description: Paste the full output of `uncork doctor`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact command you ran, with its arguments.
+      placeholder: uncork play rise-of-nations-extended-edition
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead, including any error message.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Run the command again with `-vv` and paste the output. For a game launch, also attach the launch log whose path Uncork prints.
+        Logs contain paths under your home folder; edit out anything you do not want to share.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true

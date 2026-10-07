@@ -1,0 +1,121 @@
+# Publish a GitHub Release from a `v*` tag: an aarch64-apple-darwin release
+# build of the `uncork` CLI, ad-hoc signed and packed as
+# uncork-v<version>-aarch64-apple-darwin.tar.gz with the licenses and the
+# README, plus SHA256SUMS and generated release notes.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  TARGET: aarch64-apple-darwin
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: build and publish (macos-26)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          target: aarch64-apple-darwin
+          cache-shared-key: release
+          cache-on-failure: true
+          rustflags: ""
+          build-warnings: warn
+
+      - name: version from tag
+        # The tag must match the uncork crate's version, so the archive name
+        # and `uncork --version` agree.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          crate_version="$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "uncork") | .version')"
+          if [ "$version" != "$crate_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the uncork crate version $crate_version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "NAME=uncork-v$version-$TARGET" >> "$GITHUB_ENV"
+
+      - name: build
+        run: cargo build --release --locked --target "$TARGET" -p uncork
+
+      - name: sign, package, checksum
+        run: |
+          bin="target/$TARGET/release/uncork"
+          test "$(lipo -archs "$bin")" = arm64
+          stage="dist/$NAME"
+          rm -rf dist
+          mkdir -p "$stage"
+          cp "$bin" "$stage/uncork"
+          # Apple Silicon refuses to run unsigned arm64 code; an ad-hoc
+          # signature is enough. Signing is the last change to the binary.
+          codesign --force --sign - "$stage/uncork"
+          codesign --verify --strict --verbose=2 "$stage/uncork"
+          cp LICENSE-MIT LICENSE-APACHE README.md "$stage/"
+          # No AppleDouble (._*) files or runner user names in the archive.
+          COPYFILE_DISABLE=1 tar -C dist --no-mac-metadata --uid 0 --gid 0 --uname root --gname wheel \
+            -czf "dist/$NAME.tar.gz" "$NAME"
+          (cd dist && shasum -a 256 "$NAME.tar.gz" > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: smoke test the packaged binary
+        run: |
+          rm -rf smoke
+          mkdir smoke
+          tar -C smoke -xzf "dist/$NAME.tar.gz"
+          "smoke/$NAME/uncork" --version
+          "smoke/$NAME/uncork" --help > /dev/null
+
+      - name: release notes header
+        run: |
+          {
+            echo "## Install"
+            echo
+            echo "Apple Silicon Macs only. Download \`$NAME.tar.gz\` and \`SHA256SUMS\`, then:"
+            echo
+            echo '```sh'
+            echo "shasum -a 256 -c SHA256SUMS"
+            echo "tar -xzf $NAME.tar.gz"
+            echo "$NAME/uncork setup"
+            echo '```'
+            echo
+            echo "The binary is ad-hoc signed, not notarized. A copy downloaded with a web browser is quarantined by Gatekeeper; download with \`curl -LO\`, or clear the flag with \`xattr -d com.apple.quarantine $NAME/uncork\`."
+            echo
+            echo "From source: \`cargo install --git https://github.com/$GITHUB_REPOSITORY --tag $GITHUB_REF_NAME --locked uncork\`."
+            echo
+            echo "Built from \`$GITHUB_SHA\`."
+            echo
+          } > dist/RELEASE_NOTES_HEADER.md
+          cat dist/RELEASE_NOTES_HEADER.md
+
+      - name: publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--generate-notes --verify-tag)
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" "dist/$NAME.tar.gz" dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "Uncork $GITHUB_REF_NAME" \
+            --notes-file dist/RELEASE_NOTES_HEADER.md "${flags[@]}"

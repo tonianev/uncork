@@ -1,0 +1,49 @@
+# Clippy configuration. The lint levels live in [workspace.lints] in
+# Cargo.toml; this file only tunes lints.
+
+# `clippy::doc_markdown` asks for backticks around CamelCase words in doc
+# comments. These are product and API names, not code, so prose may use them
+# bare. ".." keeps clippy's default list (macOS, GitHub, DirectX, OpenGL, ...).
+doc-valid-idents = [
+  "..",
+  # Wine, graphics and media
+  "CrossOver",
+  "CodeWeavers",
+  "WineHQ",
+  "WineD3D",
+  "WoW64",
+  "NTSync",
+  "D3DMetal",
+  "MetalFX",
+  "MoltenVK",
+  "KosmicKrisp",
+  "GStreamer",
+  "FFmpeg",
+  "FreeType",
+  "GnuTLS",
+  # Windows APIs games ask for
+  "DirectDraw",
+  "DirectInput",
+  "DirectMusic",
+  "DirectShow",
+  "DirectSound",
+  "XAudio2",
+  "XInput",
+  "SetupAPI",
+  "WinHTTP",
+  "InstallShield",
+  # Steam
+  "KeyValues",
+  "SteamCMD",
+  "SteamOS",
+  "ProtonDB",
+  # Apple platform
+  "LaunchServices",
+  "AppleScript",
+  "SwiftUI",
+  "UniFFI",
+  "ProMotion",
+  "HiDPI",
+  # Architectures
+  "x86_64",
+]
