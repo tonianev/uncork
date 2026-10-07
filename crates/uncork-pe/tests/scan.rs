@@ -322,7 +322,7 @@ fn sibling_dlls_of_another_architecture_are_skipped() {
 }
 
 #[test]
-fn unparseable_dlls_are_skipped_with_the_reason() {
+fn unparsable_dlls_are_skipped_with_the_reason() {
     let game = GameDir::new();
     game.pe("game.exe", &PeBuilder::pe32());
     game.file("empty.dll", b"");

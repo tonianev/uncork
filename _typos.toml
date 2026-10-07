@@ -14,6 +14,9 @@ extend-ignore-re = [
 ]
 
 [default.extend-words]
+# Fragments of non-ASCII test strings (b"caf\xE9") and of hashed test input.
+caf = "caf"
+abd = "abd"
 # Keys are lowercase; mapping a word to itself marks the spelling intentional.
 # Uncork and its runtime pieces.
 uncork = "uncork"

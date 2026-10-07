@@ -680,7 +680,7 @@ mod tests {
             (b"\xEF\xBB\xBF[A]\r\n", Encoding::Utf8),
             (&utf16le, Encoding::Utf16 { big_endian: false }),
             (&utf16be, Encoding::Utf16 { big_endian: true }),
-            (b"[A]\r\n; caf\xE9 \x80\xFF\r\n", Encoding::Ansi),
+            (b"[A]\r\n; r\xE9sum\xE9 \x80\xFF\r\n", Encoding::Ansi),
         ];
         for (bytes, expected) in cases {
             let (encoding, text) = Encoding::decode(bytes).unwrap();
