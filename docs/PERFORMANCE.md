@@ -1,6 +1,6 @@
 # Performance
 
-This document lists every setting Uncork uses to make games run fast on Apple Silicon: what each one does, its default, where it is set, and the evidence for it. It also lists the pitfalls that silently cost performance, the open questions that still need measuring, and how to benchmark a change so the result can be trusted. Settings are only defaults when there is evidence for them; everything else is opt-in. Where a number comes from a third party it says so.
+This document lists every setting Uncork uses to make games run fast on Apple Silicon: what each one does, its default, where it is set, and the evidence for it. It also records what has been measured so far, the pitfalls that silently cost performance, the open questions that still need measuring, and how to benchmark a change so the result can be trusted. Settings are only defaults when there is evidence for them; everything else is opt-in. Where a number comes from a third party it says so.
 
 ## Where settings come from
 
@@ -8,7 +8,7 @@ This document lists every setting Uncork uses to make games run fast on Apple Si
 |---|---|---|
 | Bottle | `[performance]`, `env` and `dll_overrides` in `bottles/<name>/uncork.toml`; `uncork bottle set <name> performance.retina=true` | Lowest |
 | Profile | `[wine]`, `[performance]`, `[env]` and `[dll_overrides]` in the game's profile ([profiles/README.md](../profiles/README.md)) | Overrides the bottle |
-| Command line | `--hud`, `--metalfx`, `--retina`, `--wine-debug`, `--backend`, `-e KEY=VALUE` on `play`, `run`, `steam start` and `steam launch` | Highest |
+| Command line | `--hud`, `--metalfx`, `--retina`, `--game-mode`, `--wine-debug`, `--backend`, `-e KEY=VALUE` on `play`, `run` and `steam launch` ([CLI.md](CLI.md#uncork-play)). `steam start` accepts them too but applies only `--wine-debug` and `-e` to the client | Highest |
 
 `uncork play <game> --dry-run` prints the resulting command and environment. Check it before and after changing a setting.
 
@@ -16,18 +16,34 @@ This document lists every setting Uncork uses to make games run fast on Apple Si
 
 | Setting | Default | Effect | Evidence |
 |---|---|---|---|
-| `performance.msync` | On; effective only when the Wine runtime has the `msync` feature | Sets `WINEMSYNC=1` for every process in the bottle, wineserver included | [msync](#msync) |
+| `performance.msync` | On. Effective only when the Wine runtime has the `msync` feature, which the catalog's runtime has | Sets `WINEMSYNC=1` for every process in the bottle, wineserver included | [msync](#msync) |
 | `performance.avx` | On | Sets `ROSETTA_ADVERTISE_AVX=1` | [AVX under Rosetta](#avx-under-rosetta) |
 | `performance.retina` | Off | Mac driver `RetinaMode` | [Retina mode](#retina-mode) |
 | `performance.hud` | Off | Sets `MTL_HUD_ENABLED=1` | [Metal HUD](#metal-performance-hud) |
 | `performance.metalfx` | Off | `DXMT_METALFX_SPATIAL_SWAPCHAIN=1` (DXMT) or `D3DM_ENABLE_METALFX=1` (D3DMetal) | [MetalFX](#metalfx) |
-| `performance.game_mode` | Off (experimental) | Launch through a games-category app bundle | [Game Mode](#game-mode) |
-| Logging | Off | `WINEDEBUG=-all`, `DXMT_LOG_LEVEL=none`, `DXVK_LOG_LEVEL=none`; `--wine-debug <channels>` turns Wine channels and backend logs on for one launch | [Logging](#logging) |
+| `performance.game_mode` | Off (experimental, unverified) | Launch through a games-category app bundle; `--game-mode` does it for one launch | [Game Mode](#game-mode) |
+| Logging | Off | `WINEDEBUG=-all`, `DXMT_LOG_LEVEL=none`, `DXVK_LOG_LEVEL=none`, `MVK_CONFIG_LOG_LEVEL=1`; `--wine-debug <channels>` turns Wine channels and backend logs on for one launch | [Logging](#logging) |
 | Shader caches | Per bottle | `DXMT_SHADER_CACHE_PATH=<bottle>/cache/dxmt`, `DXVK_STATE_CACHE_PATH=<bottle>/cache/dxvk` | [Shader caches](#shader-caches) |
 | DXVK pipeline compilation | Async | `DXVK_ASYNC=1`, `MVK_CONFIG_RESUME_LOST_DEVICE=1` | [DXVK](#dxvk-on-moltenvk) |
 | WineD3D renderer | OpenGL | `WINE_D3D_CONFIG=renderer=gl` | [wined3d_main.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/wined3d/wined3d_main.c) |
 | Cursor confinement, vertical sync, App Nap | Confine on, vsync allowed, App Nap off | Mac driver registry keys | [Mac driver keys](#mac-driver-keys) |
 | Large address aware | Per profile (`WINE_LARGE_ADDRESS_AWARE=1` for Rise of Nations) | 4 GiB address space for a 32-bit game | [Large address aware](#large-address-aware) |
+
+## Measured so far
+
+First-hand numbers, 2026-10-07: MacBook Pro with Apple M5 Max, macOS 27.0.1 (26A434), Wine `winecx-gptk-4.7.3`, DXMT 0.80, DXVK-macOS 1.10.3, msync on, Retina off. They are single observations, not benchmarks run by [the procedure below](#how-to-benchmark).
+
+| What | Result |
+|---|---|
+| Rise of Nations: Extended Edition, main menu, DXMT 0.80, windowed 1728x1117, Metal HUD | 120 FPS (the display's cap), GPU time 0.48 ms per frame, frame interval 8.33 ms; HUD reported "Composited" presentation and Game Mode off. Run by hand with the DLLs and overrides `uncork play` uses, with `Fullscreen=0` set in `rise2.ini` for the test |
+| `uncork play rise-of-nations --hud`, Steam not running | About 44 s from the command to the game, Steam's start included |
+| Signed-in Steam client, start to running (`ActiveProcess` `pid` set) | About 18 s, by hand |
+| `uncork bottle create` | 13.8 s with Rosetta's translation cache warm; `wineboot -u` by hand on a fresh prefix took 29 s cold, and its wineserver exited at 33 s |
+| `uncork runtime install all` from verified cached archives | 3.4 s for Wine, DXMT and DXVK |
+| `uncork bottle import` of a 21 GB CrossOver bottle | About 6 s; APFS clones use almost no extra space until files change |
+| `wine C:\windows\syswow64\cmd.exe /c ver` (32-bit) | 1.2 s, by hand |
+
+Not measured yet: a match or skirmish, the 99th-percentile frame time, WineD3D on the same scene, Game Mode, and a long session.
 
 ## msync
 
@@ -45,9 +61,9 @@ Rules:
 - Every process of a wineserver must agree. A client whose `WINEMSYNC` differs from the server's logs an error and exits. Uncork therefore sets it in the base environment shared by Steam, games and tools ([ARCHITECTURE.md](ARCHITECTURE.md#environment)). A profile that overrides `wine.msync` needs the bottle's wineserver restarted (`uncork bottle kill <bottle>`) when the value differs from what is running.
 - `WINEMSYNC_QLIMIT` sizes the server's message queue (default 50). There is no evidence for changing it.
 - `WINEESYNC` is never set: esync is gone from the CrossOver 26 tree, and wine-staging dropped it at v10.16 ([wine-staging](https://github.com/wine-staging/wine-staging/tree/v11.18/patches)).
-- Stock msync was slower than no msync on multi-object waits until fixes in the frankea/dappermint line: four-way multi-wait 366 to 84 ms, alertable wait 293 to 61 ms (their microbenchmarks, not independently reproduced; [frankea/Whisky v4.6.4-beta.1](https://github.com/frankea/Whisky/releases/tag/v4.6.4-beta.1)). Uncork's own runtime build carries those fixes ([RUNTIME.md](RUNTIME.md#patch-queue)).
-- Runtime matters. The catalog declares `msync` only for the `winecx-gptk-4.7.3` runtime. The recommended `sikarugir-11.0_1` runtime is not tagged `msync`, so with it Uncork does not set `WINEMSYNC`, whatever `performance.msync` says. Choosing between per-process backends and msync today is a trade-off; the own runtime (M2) is meant to remove it ([RUNTIME.md](RUNTIME.md#phase-0-pinned-upstream-builds)).
-- A Steam web UI hang under msync was reported on one non-CrossOver Wine 10 engine ([highball-db](https://github.com/gauthierpiarrette/highball-db/blob/main/recipes/launchers/steam.json)); CrossOver 26.1's own Steam bottle runs with msync and a working UI. Treat it as engine-specific until measured on Uncork's runtime.
+- Stock msync was slower than no msync on multi-object waits until fixes in the frankea/dappermint line: four-way multi-wait 366 to 84 ms, alertable wait 293 to 61 ms (their microbenchmarks, not independently reproduced; [frankea/Whisky v4.6.4-beta.1](https://github.com/frankea/Whisky/releases/tag/v4.6.4-beta.1)). The catalog's `winecx-gptk-4.7.3` comes from the dappermint line ([release](https://github.com/dappermint/winecx-gptk/releases/tag/runtime-v4.7.3)); Uncork's own runtime build (M2) is to carry the fixes as a patch ([RUNTIME.md](RUNTIME.md#patch-queue)).
+- Uncork sets `WINEMSYNC=1` only when the Wine runtime is tagged `msync`. The catalog's only runtime, `winecx-gptk-4.7.3`, is: its `ntdll.so` contains `WINEMSYNC` and `WINEMSYNC_SPINS`, and Wine prints `msync: up and running.` at start. With the default `performance.msync = true`, every launch, the Steam client and Uncork's `wine reg` queries run with `WINEMSYNC=1` (checked in the `--dry-run` command on 2026-10-07).
+- A Steam web UI hang under msync was reported on one non-CrossOver Wine 10 engine ([highball-db](https://github.com/gauthierpiarrette/highball-db/blob/main/recipes/launchers/steam.json)). On `winecx-gptk-4.7.3` with msync on, the client rendered its chrome and library and ran next to Rise of Nations (2026-10-07); a 2-hour session has not been run yet.
 
 ## AVX under Rosetta
 
@@ -59,7 +75,7 @@ Rosetta translates AVX and AVX2 but not AVX-512 ([Apple](https://developer.apple
 
 ## Retina mode
 
-With `RetinaMode` on, Wine's Mac driver gives Windows programs the full backing-pixel resolution, so a game renders up to four times the pixels (twice in each direction). The key is read only prefix-wide, because DPI must agree across processes ([macdrv_main.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/winemac.drv/macdrv_main.c)). Default off. Turn it on for a game whose UI scales and that has GPU headroom; leave it off for pixel-based UIs such as Rise of Nations'. Because it is prefix-wide it also changes the Steam client.
+With `RetinaMode` on, Wine's Mac driver gives Windows programs the full backing-pixel resolution, so a game renders up to four times the pixels (twice in each direction). The key is read only prefix-wide, because DPI must agree across processes ([macdrv_main.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/winemac.drv/macdrv_main.c)). Default off. Turn it on for a game whose UI scales and that has GPU headroom; leave it off for pixel-based UIs such as Rise of Nations'. Because it is prefix-wide it also changes the Steam client. For the same reason a launch never changes it: `uncork bottle set <bottle> performance.retina=true` rewrites the bottle's registry, while `--retina` or a profile's `retina` that differs from the bottle's only adds a warning to the plan.
 
 ## Metal performance HUD
 
@@ -97,7 +113,7 @@ These are not set by default; put them in a profile's `[env]` or pass them with 
 
 ## DXVK on MoltenVK
 
-Gcenx's DXVK-macOS 1.10.3 is frozen and carries the async pipeline patch; `DXVK_ASYNC=1` compiles pipelines in the background, trading a frame or two of missing effects for fewer compile stutters ([DXVK-macOS](https://github.com/Gcenx/DXVK-macOS)). `MVK_CONFIG_RESUME_LOST_DEVICE=1` lets MoltenVK continue after a lost device instead of ending the game ([MoltenVK configuration](https://github.com/KhronosGroup/MoltenVK/blob/v1.4.2/Docs/MoltenVK_Configuration_Parameters.md)). DXVK is a fallback only: MoltenVK has no geometry shaders, and upstream DXVK 2.x and 3.x need Vulkan features MoltenVK lacks.
+Gcenx's DXVK-macOS 1.10.3 is frozen and carries the async pipeline patch; `DXVK_ASYNC=1` compiles pipelines in the background, trading a frame or two of missing effects for fewer compile stutters ([DXVK-macOS](https://github.com/Gcenx/DXVK-macOS)). `MVK_CONFIG_RESUME_LOST_DEVICE=1` lets MoltenVK continue after a lost device instead of ending the game ([MoltenVK configuration](https://github.com/KhronosGroup/MoltenVK/blob/v1.4.2/Docs/MoltenVK_Configuration_Parameters.md)). For games DXVK is a fallback only: MoltenVK has no geometry shaders, and upstream DXVK 2.x and 3.x need Vulkan features MoltenVK lacks. It is also what renders the Steam client's web UI ([STEAM.md](STEAM.md#graphics-steam-runs-on-dxvk)); the client gets `DXVK_LOG_LEVEL=none` but none of the game-side DXVK variables.
 
 ## Shader caches
 
@@ -111,7 +127,7 @@ The first run after a game update or a backend update rebuilds shaders and stutt
 
 ## Logging
 
-Logging is off in every launch: `WINEDEBUG=-all`, `DXMT_LOG_LEVEL=none`, `DXVK_LOG_LEVEL=none`. Wine's debug channels are printed by every process to its standard error and cost real frame time when enabled. `--wine-debug +loaddll` (or any channel list) turns Wine's channels on and sets the backends' log levels to `info` for that launch only; output goes to the launch log in `$UNCORK_HOME/logs/`.
+Logging is off in every launch: `WINEDEBUG=-all`, `DXMT_LOG_LEVEL=none`, `DXVK_LOG_LEVEL=none`, and `MVK_CONFIG_LOG_LEVEL=1` (MoltenVK errors only; it otherwise prints `[mvk-info]` device lines on every start). Wine's debug channels are printed by every process to its standard error and cost real frame time when enabled. `--wine-debug +loaddll` (or any channel list) turns Wine's channels on and sets the backends' log levels to `info` for that launch only; output goes to the launch log in `$UNCORK_HOME/logs/`.
 
 ## Mac driver keys
 
@@ -139,6 +155,7 @@ This is the most expensive pitfall known for 32-bit games under Rosetta.
 - Wine turns no-exec (DEP) off for the whole process when any loaded module lacks `IMAGE_DLLCHARACTERISTICS_NX_COMPAT`, and logs `disabling no-exec because of <module>` ([loader.c](https://github.com/wine-mirror/wine/blob/master/dlls/ntdll/loader.c)). For a WoW64 process that makes every readable mapping executable.
 - Under Rosetta that is slow. First-touch page faults measured about 200 times costlier, and one game's boot went from 41.7 s to 16.9 s with the check disabled ([athei/wine-build#3](https://github.com/athei/wine-build/issues/3)). On macOS 26, 32-bit games on DXMT become slideshows when DEP is off, because Metal's placed buffers end up executable ([dxmt#161](https://github.com/3Shain/dxmt/issues/161)).
 - `uncork inspect <exe>` reports the modules beside the game that lack `NX_COMPAT` (the scan's `non_nx_modules`). Run a game with `--wine-debug warn+module` and search the launch log for `disabling no-exec because of` to see which module triggered it at run time.
+- Rise of Nations: Extended Edition ships 11 such DLLs beside `riseofnations.exe`, and every plan for it carries a warning naming them: `avutil-ttv-51.dll`, `Eulaxp1.dll`, `libmp3lame-ttv.dll`, `patchw32.dll`, `PidGenx.dll`, `pp_unicows.dll`, `rtp32cb.dll`, `SteamAPIUpdater.dll`, `swresample-ttv-0.dll`, `unicows.dll`, `UpdateDLLWrapper.dll`. Whether the game loads any of them, and so runs with DEP off, has not been checked with `warn+module` yet. The warning is printed for 32-bit programs only.
 - Uncork's own runtime (M2) carries a patch that makes the main executable decide, as Windows does ([athei/wine 539aa62220](https://github.com/athei/wine/commit/539aa62220)), and every PE file Uncork ships must be `NX_COMPAT` ([RUNTIME.md](RUNTIME.md#patch-queue)).
 - A `WINE_DISABLE_NX_COMPAT` escape hatch existed in one Gcenx build (11.6) and was removed; do not rely on it.
 
@@ -146,7 +163,7 @@ This is the most expensive pitfall known for 32-bit games under Rosetta.
 
 macOS gives a game Game Mode (priority CPU and GPU access, lower Bluetooth latency) when an app whose bundle declares the games category is frontmost and full screen; it does not activate for binaries spawned from a terminal ([Apple Support](https://support.apple.com/en-us/105118), [macOS 26 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-26-release-notes), [LSSupportsGameMode](https://developer.apple.com/documentation/bundleresources/information-property-list/lssupportsgamemode)). Neither Wine's loader nor CrossOver declares a games category ([wine_info.plist.in](https://gitlab.winehq.org/wine/wine/-/blob/master/loader/wine_info.plist.in)).
 
-`performance.game_mode = true` launches through a generated `apps/<id>.app` that LaunchServices opens; its launcher `exec`s the Wine loader in place ([ARCHITECTURE.md](ARCHITECTURE.md#game-mode-experimental)). It stays off by default until these open questions are answered on real hardware:
+`--game-mode` on one launch, or `performance.game_mode = true` for a bottle (`uncork bottle set <bottle> performance.game_mode=true`), routes `direct` and `standalone` launches through a generated `apps/<id>.app` that LaunchServices opens with `/usr/bin/open -n -W`; its launcher `exec`s the Wine loader in place ([ARCHITECTURE.md](ARCHITECTURE.md#game-mode-experimental)). In `applaunch` mode the Steam client starts the game and no bundle is used. The wiring is implemented and unit-tested but not verified on real hardware: a check on 2026-10-07 was inconclusive because the display was asleep. The manual run in [Measured so far](#measured-so-far) did not use a bundle, and the Metal HUD reported Game Mode off. It stays off by default until these open questions are answered on real hardware:
 
 1. Does macOS keep Game Mode for the bundle after its launcher `exec`s the Wine loader?
 2. Does Game Mode turn on with the Mac driver's window-level full screen, and does `CaptureDisplaysForFullscreen=y` change that?

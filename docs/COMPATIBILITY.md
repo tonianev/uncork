@@ -16,6 +16,17 @@ Every profile has a `[compat] status`. The levels are ordered from worst to best
 
 The overall status is the best of the recent first-hand reports, where recent means made on current Uncork, runtime and macOS versions; a better result on outdated versions does not hold the status up, and `notes` says what changed. A status describes Uncork's default setup for that game; a result that needs extra steps says so in `notes`.
 
+## Current results
+
+First-hand results so far. Both built-in profiles are `untested`: reaching the main menu does not show that a game is playable, so a status is set only after a session through the checklist below.
+
+| Game | Status | Run on | Verified | Not tested yet |
+|---|---|---|---|---|
+| Rise of Nations: Extended Edition (287450) | `untested` | 2026-10-07; MacBook Pro M5 Max, macOS 27.0.1; Wine `winecx-gptk-4.7.3`, DXMT 0.80, Steam client 1788652215 in a bottle imported from CrossOver | `uncork play rise-of-nations --hud` started Steam, then the game on DXMT 0.80 (its `d3d11.dll` and `dxgi.dll` loaded from `syswow64`, the game's own `d3dcompiler_47.dll`) in about 44 s; `SkipIntroMovies=1` was applied. In a run by hand with the same DLLs and overrides, the main menu rendered windowed at 1728x1117: 120 FPS (the display's cap), GPU time 0.48 ms per frame. Wine logs that no General MIDI DLS collection is installed, so DirectMusic music may be silent. Uncork warns about 11 DLLs without `NX_COMPAT` that ship with the game | A match or skirmish, save and load, music and sound, videos, the multiplayer lobby list, alt-tab, full screen, Game Mode, WineD3D for comparison |
+| Age of Empires II: Definitive Edition (813780) | `untested` | 2026-10-07, same Mac and bottle | `uncork steam games` found it installed (16.5 GB) and matched its profile | Everything; it has not been launched |
+
+The full record of that day, with the commands, is in the [README](../README.md#verified-on).
+
 ## What to test
 
 Not every game has every feature; skip what does not apply and say so.

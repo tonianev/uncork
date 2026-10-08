@@ -1,7 +1,9 @@
 # 0003: Choose the graphics backend per process
 
-Status: Accepted
+Status: Accepted; decision 2 superseded by [0005](0005-steam-cef-on-app-local-dxvk.md)
 Date: 2026-10-07
+
+Hands-on testing showed that the Steam client does not work on WineD3D with its web UI in software: every window stays black. [0005](0005-steam-cef-on-app-local-dxvk.md) gives the client app-local DXVK instead. The rest of this record stands. With the catalog's current Wine runtime every DXMT and DXVK launch uses `PrefixNative` ([RUNTIME.md](../RUNTIME.md#phase-0-pinned-upstream-builds)).
 
 This record decides that Uncork chooses the Direct3D translation layer for each process it starts, not for a whole bottle, and how that choice is wired into Wine depending on what the Wine runtime supports.
 

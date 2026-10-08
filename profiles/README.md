@@ -53,7 +53,7 @@ reason = "The intro videos are WMV through DirectShow and stall without GStreame
 
 [compat]
 status = "untested"
-notes = "Launch Steam first (uncork play does this)."
+notes = "Needs the Steam client running in the same bottle; uncork play starts it."
 ```
 
 Every table rejects unknown keys, so a misspelt key is an error, not a silently ignored setting. Only `schema`, `id`, `name` and `[exe] path` are required.
@@ -105,7 +105,7 @@ Each key overrides the bottle's `[performance]` value for this game; omitted key
 
 | Key | Type | Meaning |
 |---|---|---|
-| `retina` | boolean | Render at native Retina resolution (prefix-wide `RetinaMode`) |
+| `retina` | boolean | Ask for native Retina resolution. `RetinaMode` is a prefix-wide registry setting that a launch does not change, so a value that differs from the bottle's only produces a warning; `uncork bottle set <bottle> performance.retina=true` changes it |
 | `metalfx` | boolean | Upscale with MetalFX where the backend supports it |
 | `avx` | boolean | Let Rosetta advertise AVX/AVX2 (`ROSETTA_ADVERTISE_AVX`) |
 
@@ -185,7 +185,7 @@ A profile with any of these problems is rejected (`cargo test -p uncork-core` ch
 
 Many games keep settings in an INI file that profiles need to control, such as Rise of Nations' `SkipIntroMovies`. Before each launch Uncork applies every `[[ini]]` entry:
 
-- The base is resolved inside the bottle. `%APPDATA%`, `%LOCALAPPDATA%` and `%USERPROFILE%` are the prefix user's folders (the one directory under `drive_c/users/` other than `Public`); `%INSTALLDIR%` is the game's install directory.
+- The base is resolved inside the bottle. `%APPDATA%`, `%LOCALAPPDATA%` and `%USERPROFILE%` are the prefix user's folders under `drive_c/users/<user>/`, where `<user>` is the bottle's `env.USER` if set (a bottle imported from CrossOver has `crossover`), else the one directory under `drive_c/users/` other than `Public`, else your macOS user name; `%INSTALLDIR%` is the game's install directory. Path components that exist on disk with different letter case are matched ignoring case.
 - If the file does not exist yet, nothing happens: many games create their INI on first run, so the edit takes effect from the second launch.
 - An existing key is rewritten in place, keeping its original spelling. A missing key is appended at the end of its section; a missing section is appended at the end of the file.
 - Everything else is preserved byte for byte: line order, comments, unknown keys, CRLF or LF line endings, and the encoding (UTF-8 or ASCII, or UTF-16LE with a byte-order mark, written back the same way).
@@ -201,4 +201,4 @@ An INI edit is enforced on every launch, so a value changed in the game's own op
 | `applaunch` | Uncork restarts Steam with the game's environment and runs `steam.exe -applaunch <appid> <args>`; the game inherits Steam's environment | Steam games whose DRM must be started by Steam |
 | `standalone` | Uncork starts the executable without Steam | DRM-free and non-Steam games. The default without `[steam]` |
 
-Prefer `direct`: it is the only mode in which the game gets its own backend while Steam stays on WineD3D. Use `applaunch` when a direct start fails because the game insists on being launched by Steam. Details and trade-offs are in [docs/STEAM.md](../docs/STEAM.md#launch-modes).
+Prefer `direct`: it is the only mode in which the game gets its own backend environment while the Steam client keeps its own (DXVK, loaded from its web helper's directory). Use `applaunch` when a direct start fails because the game insists on being launched by Steam. Details and trade-offs are in [docs/STEAM.md](../docs/STEAM.md#launch-modes).

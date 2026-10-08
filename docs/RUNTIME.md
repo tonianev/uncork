@@ -15,22 +15,41 @@ This document says where Uncork's Wine runtime and graphics components come from
 
 | Kind | Version | Size | License | Features | Recommended | Publisher |
 |---|---|---|---|---|---|---|
-| `wine` | `sikarugir-11.0_1` | 167,322,744 B | LGPL-2.1-or-later | `wow64`, `dxmt`, `d3dmetal`, `renderer-dllpath` | Yes | [Sikarugir-App/Engines](https://github.com/Sikarugir-App/Engines/releases/tag/v1.0) (Gcenx), source [Sikarugir-App/wine](https://github.com/Sikarugir-App/wine) |
-| `wine` | `winecx-gptk-4.7.3` | 461,131,598 B | LGPL-2.1-or-later | `wow64`, `msync`, `dxmt`, `d3dmetal`, `large-address-aware` | No | [dappermint/winecx-gptk](https://github.com/dappermint/winecx-gptk/releases/tag/runtime-v4.7.3), source [dappermint/winecx](https://github.com/dappermint/winecx) |
+| `wine` | `winecx-gptk-4.7.3` | 461,131,598 B | LGPL-2.1-or-later | `wow64`, `msync`, `dxmt`, `d3dmetal`, `large-address-aware` | Yes | [dappermint/winecx-gptk](https://github.com/dappermint/winecx-gptk/releases/tag/runtime-v4.7.3), source [dappermint/winecx](https://github.com/dappermint/winecx) |
 | `dxmt` | `0.80` | 18,681,669 B | MIT | | Yes | [3Shain/dxmt v0.80](https://github.com/3Shain/dxmt/releases/tag/v0.80) |
 | `dxvk` | `1.10.3-20230507` | 2,785,833 B | Zlib | | Yes | [Gcenx/DXVK-macOS](https://github.com/Gcenx/DXVK-macOS/releases/tag/v1.10.3-20230507-repack) |
 
-The two Wine runtimes trade features against each other:
+Together the three are 482,599,100 B (482.6 MB); `uncork setup` adds Valve's `SteamSetup.exe`, about 2.4 MB, for 485.0 MB in all.
 
-| | `sikarugir-11.0_1` | `winecx-gptk-4.7.3` |
-|---|---|---|
-| Base | Wine 11.0 for macOS (Sikarugir engine) | CrossOver 26.3's Wine changes rebased onto Wine 11.17, with msync and its fixes ([release](https://github.com/dappermint/winecx-gptk/releases/tag/runtime-v4.7.3)) |
-| Backend activation | Per process with `WINEDLLPATH_DXMT`/`_DXVK`/`_D3DMETAL` (`RendererEnv`) | Backend DLLs copied into the prefix with overrides (`PrefixNative`); D3DMetal cannot be activated this way |
-| msync | Not declared | Yes |
-| `WINE_LARGE_ADDRESS_AWARE` | Not declared | Yes |
-| Minimum macOS | Not documented by the publisher | 26.0 |
+### The Wine runtime
 
-The Sikarugir engine is recommended because per-process activation is what lets Steam and a game use different backends cleanly ([ADR 0003](adr/0003-per-process-backends.md)). The phase-1 build is meant to end the trade-off by carrying msync, large-address-aware and `WINEDLLPATH_PREPEND` in one runtime. Gcenx's upstream [macOS_Wine_builds](https://github.com/Gcenx/macOS_Wine_builds) are a useful A/B baseline but lack msync and the Metal glue DXMT and D3DMetal need, so they are not in the catalog.
+`winecx-gptk-4.7.3` is CrossOver 26.3's Wine changes rebased onto Wine 11.17, with msync and its fixes ([release](https://github.com/dappermint/winecx-gptk/releases/tag/runtime-v4.7.3)). What was checked on the installed runtime, macOS 27.0.1 on an M5 Max, 2026-10-07:
+
+| Fact | How it was checked |
+|---|---|
+| `bin/wine --version` prints `wine-11.17` | Ran it |
+| The archive nests the tree under `Libraries/Wine`; `bin/wine`, `bin/wine64` and `bin/wineloader` are symlinks to `../lib/wine/x86_64-unix/wine`. Install moves the tree to the top of the component directory | Archive listing; `uncork runtime install` |
+| The libraries it needs ship in its own `lib/` (the catalog note lists FreeType, GnuTLS, MoltenVK 1.4.2 and GStreamer) | Archive listing |
+| `lib/wine/x86_64-unix/winemetal.so` is DXMT 0.80's Unix bridge, which `PrefixNative` activation of DXMT requires | Archive listing; DXMT 0.80 loaded with it in Rise of Nations |
+| `ntdll.so` contains `WINEMSYNC`, `WINEMSYNC_SPINS`, `WINE_LARGE_ADDRESS_AWARE` and `CX_APPLEGPTK_LIBD3DSHARED_PATH`; Wine prints `msync: up and running.` at start | `strings`; stderr |
+| `ntdll.so` has no `WINEDLLPATH_PREPEND` or `WINEDLLPATH_<RENDERER>` variables, only Wine's usual message that a non-builtin found in `WINEDLLPATH` is ignored. So it gets neither `renderer-dllpath` nor `dllpath-prepend`, and Uncork activates backends with `PrefixNative` | `strings` |
+| Built for macOS 26.0 and later (`minos 26.0`, SDK 27.0), so it does not run on older macOS | `otool -l` on `lib/wine/x86_64-unix/wine` and `ntdll.so` |
+| A new prefix takes 29 s (`wineboot -u`, cold Rosetta cache) and reports Windows 10.0.19045; 32-bit programs run (`wine C:\windows\syswow64\cmd.exe /c ver`, 1.2 s) | Ran it |
+| MoltenVK prints `[mvk-info]` lines on every start unless `MVK_CONFIG_LOG_LEVEL=1`, which Uncork sets | stderr |
+| The archive also carries DXMT and DXVK builds (`Libraries/DXMT`, `Libraries/DXVK`). They stay unused in the component directory: Uncork installs and pins its `dxmt` and `dxvk` components separately | Component directory listing |
+
+What follows from having this one runtime:
+
+- msync is on by default ([PERFORMANCE.md](PERFORMANCE.md#msync)), and `WINE_LARGE_ADDRESS_AWARE` from a profile takes effect.
+- Every DXMT and DXVK launch uses `PrefixNative`: the backend's DLLs are copied into `system32` and `syswow64` and chosen per process with DLL overrides ([ARCHITECTURE.md](ARCHITECTURE.md#activation-strategies)). The Steam client is unaffected; it loads its DXVK from its own directory ([STEAM.md](STEAM.md#graphics-steam-runs-on-dxvk)).
+- D3DMetal can be imported but not used: `PrefixNative` cannot activate it, so a D3DMetal launch is an error until a runtime with `renderer-dllpath` or `dllpath-prepend` is pinned. The phase-1 build adds `dllpath-prepend`.
+
+Considered and not in the catalog:
+
+| Runtime | Why not |
+|---|---|
+| Gcenx's Sikarugir engines ([Sikarugir-App/Engines](https://github.com/Sikarugir-App/Engines)), for example `sikarugir-11.0_1` | They honor `WINEDLLPATH_DXMT`, `_DXVK` and `_D3DMETAL` per process ([Sikarugir#283](https://github.com/Sikarugir-App/Sikarugir/issues/283)), which `RendererEnv` uses, but they need FreeType, GnuTLS and MoltenVK from the Sikarugir wrapper app, which Uncork does not supply. An earlier draft of the catalog recommended one; it was removed |
+| Gcenx's [macOS_Wine_builds](https://github.com/Gcenx/macOS_Wine_builds) | Upstream WineHQ builds without msync and without the Metal glue DXMT and D3DMetal need; useful as an A/B baseline only |
 
 DXMT 0.80 is the last MIT-licensed DXMT release; `main` moved to LGPL-2.1-or-later on 2026-04-25 ([LICENSE](https://github.com/3Shain/dxmt/blob/main/LICENSE)). Fixes that matter for Rise of Nations (a geometry-shader marshalling loop and zero-count draw handling, through commit [46911d7345](https://github.com/3Shain/dxmt/commit/46911d7345)) landed after 0.80, so phase 1 builds DXMT from `main`.
 
@@ -43,9 +62,9 @@ A Wine component's feature tags say what it supports. The planner reads them; it
 | `wow64` | Runs 32-bit Windows programs (new-style WoW64: `--enable-archs=i386,x86_64`) | `doctor` warns without it; a plan for a 32-bit game on a runtime without it carries a warning |
 | `msync` | Honors `WINEMSYNC=1` (Mach-semaphore synchronization) | `WINEMSYNC=1` is set only with this tag |
 | `dxmt` | The Mac driver exports the Metal view API DXMT looks up (`macdrv_functions`; [winemetal_unix.c](https://github.com/3Shain/dxmt/blob/main/src/winemetal/unix/winemetal_unix.c)) | DXMT counts as available only with this tag |
-| `d3dmetal` | Carries the CrossOver-derived glue D3DMetal needs (`__wine_unix_call` export, `CX_APPLEGPTK_LIBD3DSHARED_PATH`) | D3DMetal counts as available only with this tag |
-| `renderer-dllpath` | Honors `WINEDLLPATH_DXMT`, `WINEDLLPATH_DXVK`, `WINEDLLPATH_D3DMETAL` per process | `RendererEnv` activation |
-| `dllpath-prepend` | Honors `WINEDLLPATH_PREPEND` per process | `DllPathPrepend` activation |
+| `d3dmetal` | Carries the CrossOver-derived glue D3DMetal needs (`__wine_unix_call` export, `CX_APPLEGPTK_LIBD3DSHARED_PATH`) | D3DMetal counts as available only with this tag. Activating it also needs `renderer-dllpath` or `dllpath-prepend` |
+| `renderer-dllpath` | Honors `WINEDLLPATH_DXMT`, `WINEDLLPATH_DXVK`, `WINEDLLPATH_D3DMETAL` per process | `RendererEnv` activation. No runtime in the catalog has it |
+| `dllpath-prepend` | Honors `WINEDLLPATH_PREPEND` per process | `DllPathPrepend` activation. No runtime in the catalog has it; Uncork's own runtime is to get it from [patch 1](#patch-queue) |
 | `large-address-aware` | Honors `WINE_LARGE_ADDRESS_AWARE=1` | Profiles that set it take effect |
 
 A tag is a claim. Add one only after checking the binary, for example `strings lib/wine/x86_64-unix/ntdll.so | grep -c WINEMSYNC` for `msync`, `WINE_LARGE_ADDRESS_AWARE` for `large-address-aware`, `WINEDLLPATH_DXMT` for `renderer-dllpath`, and a 32-bit test program for `wow64`.
@@ -56,10 +75,10 @@ A tag is a claim. Add one only after checking the binary, for example `strings l
 
 | Kind | Required | Notes |
 |---|---|---|
-| `wine` | `bin/wine` (or `bin/wine64` on older builds), `bin/wineserver`, `lib/wine/x86_64-unix/`, `lib/wine/x86_64-windows/` | `lib/wine/i386-windows/` must exist for `wow64`. Wine 11 removed the `wine64` loader ([ANNOUNCE](https://github.com/wine-mirror/wine/blob/wine-11.0/ANNOUNCE.md)) |
-| `dxmt` | `x86_64-windows/` with `d3d11.dll`, `dxgi.dll`, `d3d10core.dll`, `winemetal.dll`; `x86_64-unix/winemetal.so` | `i386-windows/` with the same four DLLs for 32-bit games. The builtin variant, as in the release tarball ([guide](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks)) |
-| `dxvk` | `x86_64-windows/` and `i386-windows/` with `d3d11.dll` and `d3d10core.dll` | No `dxgi.dll` and no `d3d9.dll` in the macOS fork |
-| `d3dmetal` | `external/libd3dshared.dylib`, `external/D3DMetal.framework/`, `wine/x86_64-unix/`, `wine/x86_64-windows/` | GPTK's `redist/lib` layout. The `.so` files are symlinks to `../../external/libd3dshared.dylib` and must stay symlinks |
+| `wine` | `bin/wine` or `bin/wine64`; `lib/wine/x86_64-windows/`; `lib/wine/x86_64-unix/` | A Wine tree nested up to three levels down (winecx-gptk's `Libraries/Wine`) is moved to the top before the check. `bin/wineserver` is used but not checked. `lib/wine/i386-windows/` is what `wow64` needs; the tag declares it and install does not check it. Wine 11 removed the `wine64` loader ([ANNOUNCE](https://github.com/wine-mirror/wine/blob/wine-11.0/ANNOUNCE.md)) |
+| `dxmt` | `x86_64-windows/d3d11.dll`, `x86_64-windows/dxgi.dll`, `x86_64-windows/winemetal.dll`, `x86_64-unix/winemetal.so` | `i386-windows/` with the same DLLs for 32-bit games. `d3d10core.dll` is not checked at install, but a `PrefixNative` launch fails without it. The builtin variant, as in the release tarball ([guide](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks)) |
+| `dxvk` | `x86_64-windows/d3d11.dll` | The release's `x64/` and `x32/` are renamed to `x86_64-windows/` and `i386-windows/` before the check. `d3d10core.dll` is needed at launch and, with `d3d11.dll`, by the Steam client. No `dxgi.dll` and no `d3d9.dll` in the macOS fork |
+| `d3dmetal` | `external/D3DMetal.framework/`, `wine/x86_64-windows/` | GPTK's `redist/lib` layout. `external/libd3dshared.dylib` is needed at launch. The `wine/x86_64-unix/*.so` files are symlinks to `../../external/libd3dshared.dylib` and must stay symlinks |
 
 Graphics components use Wine's own architecture directory names (`x86_64-windows`, `i386-windows`, `x86_64-unix`), so the component directory itself is what `WINEDLLPATH_DXMT` or `WINEDLLPATH_PREPEND` points to. For D3DMetal it is the `wine/` subdirectory.
 
@@ -102,7 +121,7 @@ A pin is a promise that Uncork installs exactly one file. Changing one is a revi
 
 10. Open the PR with the URL, hash, size, license, source link, how each feature tag was verified, and the game you tested.
 
-If a publisher replaces a file in place (the Sikarugir engines are published in one rolling `v1.0` release), installs fail with a checksum mismatch until the pin is updated. That is intended: Uncork fails closed.
+If a publisher replaces a file in place (some publish every build under one rolling release tag), installs fail with a checksum mismatch until the pin is updated. That is intended: Uncork fails closed.
 
 ## Phase 1: Uncork's own CI build
 
@@ -131,7 +150,7 @@ All patches are LGPL-2.1-or-later and are sent upstream where upstream wants the
 |---|---|---|---|
 | 1 | `WINEDLLPATH_PREPEND`: call `prepend_dll_path()` from an environment variable | Wine searches its own DLL directory before `WINEDLLPATH`, so plain `WINEDLLPATH` cannot override a builtin. This enables per-process `DllPathPrepend` activation | [loader.c, wine-11.19](https://github.com/wine-mirror/wine/blob/wine-11.19/dlls/ntdll/unix/loader.c), [cx loader.c](https://github.com/dappermint/winecx/blob/crossover-26.3.0/dlls/ntdll/unix/loader.c) |
 | 2 | msync fixes: stale registrations and multi-object wait performance | Stock msync was slower than none on multi-object waits | [frankea/Whisky v4.6.4-beta.1](https://github.com/frankea/Whisky/releases/tag/v4.6.4-beta.1) |
-| 3 | `steamwebhelper.exe` argument injection: append `--no-sandbox --in-process-gpu --disable-gpu`, skip `--type=crashpad-handler` | Renders Steam's web UI in software from the Wine side. Present in CrossOver 24.0.4's public source, absent from 25.1.0's | [CX 24.0.4 process.c](https://github.com/PhoenicisOrg/winecx/blob/winecx-24.0.4/dlls/kernelbase/process.c) |
+| 3 | `steamwebhelper.exe` argument injection: append `--no-sandbox --in-process-gpu --disable-gpu`, skip `--type=crashpad-handler` | Would render Steam's web UI in software from the Wine side. Present in CrossOver 24.0.4's public source, absent from 25.1.0's. Not needed so far: on `winecx-gptk-4.7.3` the UI renders with app-local DXVK, and software CEF output stayed black (2026-10-07, [STEAM.md](STEAM.md#graphics-steam-runs-on-dxvk)). Ported only if Uncork's runtime needs it | [CX 24.0.4 process.c](https://github.com/PhoenicisOrg/winecx/blob/winecx-24.0.4/dlls/kernelbase/process.c) |
 | 4 | No-exec decided by the main executable, as on Windows | One non-`NX_COMPAT` DLL otherwise turns DEP off for the whole process; under Rosetta that made first-touch page faults about 200 times costlier | [athei/wine 539aa62220](https://github.com/athei/wine/commit/539aa62220), [athei/wine-build#3](https://github.com/athei/wine-build/issues/3) |
 | 5 | [MR 12257](https://gitlab.winehq.org/wine/wine/-/merge_requests/12257): top-down reservation at `0x7ff000000000` | Needed under Rosetta when the base is upstream Wine rather than the CrossOver tree | |
 | 6 | [MR 11538](https://gitlab.winehq.org/wine/wine/-/merge_requests/11538): Vulkan portability enumeration | Only if MoltenVK is loaded through the Vulkan loader | |

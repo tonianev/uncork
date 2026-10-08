@@ -45,4 +45,4 @@ reason = "The intro videos are WMV through DirectShow; without GStreamer WMV dec
 
 [compat]
 status = "untested"
-notes = "Launch Steam first (uncork play does this). Multiplayer lobbies use PlayFab over WinHTTP; report whether they load."
+notes = "Needs the Steam client running in the same bottle; uncork play starts it. 2026-10-07 (M5 Max, macOS 27.0.1, winecx-gptk-4.7.3, DXMT 0.80): uncork play started Steam and then the game on DXMT; in a run by hand with the same DLLs and overrides, the main menu rendered windowed at 120 FPS (display cap), GPU 0.48 ms per frame. Not tested yet: a match, audio, videos, multiplayer lobbies (PlayFab over WinHTTP), alt-tab, full screen. Wine reports no General MIDI DLS collection, so DirectMusic music may be silent."

@@ -22,4 +22,4 @@ fallbacks = ["d3dmetal", "dxvk", "wined3d"]
 
 [compat]
 status = "untested"
-notes = "Crossplay multiplayer is the reason to run the Windows version rather than the native Mac port."
+notes = "Crossplay multiplayer is the reason to run the Windows version rather than the native Mac port. Not launched yet; uncork steam games found it installed and matched this profile (2026-10-07)."
