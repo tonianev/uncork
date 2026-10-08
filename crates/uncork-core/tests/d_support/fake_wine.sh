@@ -6,6 +6,8 @@
 #   server          a wineserver runs for the prefix (every call creates it,
 #                   as a real Wine program starts one; see fake_wineserver.sh)
 #   pid             the ActiveProcess pid `reg query` prints (absent: no key)
+#   user            the ActiveProcess ActiveUser it prints (absent: no value)
+#   no-signin       a started `Steam.exe` never signs in (ActiveUser stays 0)
 #   reg-exit        exit with this status from `reg query` instead
 #   steam-hangs     `Steam.exe` starts but never registers a pid
 #   shutdown-works  `steam.exe -shutdown` clears the pid
@@ -27,7 +29,13 @@ case "$1" in
         if [ -f "$state/reg-exit" ]; then
             exit "$(cat "$state/reg-exit")"
         fi
-        if [ -f "$state/pid" ]; then
+        # reg query KEY /v <name>
+        if [ "$5" = ActiveUser ]; then
+            if [ -f "$state/pid" ] && [ -f "$state/user" ]; then
+                printf '\r\nHKEY_CURRENT_USER\\Software\\Valve\\Steam\\ActiveProcess\r\n    ActiveUser    REG_DWORD    %s\r\n\r\n' "$(cat "$state/user")"
+                exit 0
+            fi
+        elif [ -f "$state/pid" ]; then
             printf '\r\nHKEY_CURRENT_USER\\Software\\Valve\\Steam\\ActiveProcess\r\n    pid    REG_DWORD    %s\r\n\r\n' "$(cat "$state/pid")"
             exit 0
         fi
@@ -46,7 +54,10 @@ case "$1" in
                 if [ -f "$state/shutdown-works" ]; then printf '0x0' > "$state/pid"; fi
                 ;;
             *)
-                if [ ! -f "$state/steam-hangs" ]; then printf '0x274' > "$state/pid"; fi
+                if [ ! -f "$state/steam-hangs" ]; then
+                    printf '0x274' > "$state/pid"
+                    if [ -f "$state/no-signin" ]; then printf '0x0' > "$state/user"; else printf '0x1a9498de' > "$state/user"; fi
+                fi
                 ;;
         esac
         ;;

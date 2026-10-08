@@ -808,16 +808,33 @@ pub fn server_running(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<bool
 /// The `ActiveProcess` pid, or `None` when the key or value does not exist
 /// (see [`is_running`]).
 fn active_pid(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<Option<u32>> {
+    active_value(bottle, wine, "pid")
+}
+
+/// The account id Steam records as signed in
+/// ([`client::ACTIVE_USER_VALUE`]): `Some(0)` while nobody is signed in,
+/// `Some(id)` once someone is, `None` when Steam records no such value (it
+/// is then not waited for).
+///
+/// # Errors
+/// As [`is_running`].
+pub fn active_user(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<Option<u32>> {
+    active_value(bottle, wine, client::ACTIVE_USER_VALUE)
+}
+
+/// The DWORD `name` under `ActiveProcess`, or `None` when the key or value
+/// does not exist.
+fn active_value(bottle: &Bottle, wine: &WineRuntime, name: &str) -> crate::Result<Option<u32>> {
     let spec = reg_command(
         bottle,
         wine,
-        &["query", client::ACTIVE_PROCESS_KEY, "/v", "pid"],
+        &["query", client::ACTIVE_PROCESS_KEY, "/v", name],
     );
     let output = quiet_output(&spec, "wine")?;
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return Ok(client::parse_active_pid(&stdout));
+        return Ok(client::parse_active_value(&stdout, name));
     }
     if output.status.code() == Some(REG_NOT_FOUND) && is_reg_message(&stderr) {
         tracing::debug!(
@@ -898,7 +915,8 @@ fn describe_exit(status: ExitStatus) -> String {
 }
 
 /// Start Steam (`-silent`) if it is not running and wait until
-/// [`is_running`] reports it, polling every 2 s up to `timeout`. Calls
+/// [`is_running`] reports it and an account is signed in
+/// ([`active_user`]), polling every 2 s; `timeout` covers both. Calls
 /// [`prepare_client_dxvk`] first.
 ///
 /// The DXVK used is the bottle's `graphics.dxvk` pin, else the newest
@@ -910,7 +928,8 @@ fn describe_exit(status: ExitStatus) -> String {
 /// ([`Bottle::record_session_display`]).
 ///
 /// # Errors
-/// [`crate::Error::Command`] on timeout, naming the client log.
+/// [`crate::Error::Command`] on timeout (naming the client log when it did
+/// not start; asking the user to sign in when nobody signed in).
 pub fn ensure_running(
     layout: &Layout,
     bottle: &mut Bottle,
@@ -931,21 +950,77 @@ fn start_if_needed(
     timeout: Duration,
     poll: Duration,
 ) -> crate::Result<bool> {
+    let started_at = Instant::now();
     let status = client_status(bottle, wine)?;
-    if status.running {
-        return Ok(false);
+    let started = if status.running {
+        false
+    } else {
+        let steam = find_steam(bottle)?;
+        prepare_client_dxvk_logged(layout, bottle, &steam)?;
+        let (args, _) = client::silent_client_args(&[]);
+        let spec = client_spec(bottle, wine, &steam, args);
+        tracing::info!("starting Steam in bottle {}", bottle.config.name);
+        if !status.server {
+            bottle.record_session_display(display.map(Display::signature).as_deref());
+        }
+        reap_in_background(crate::process::spawn(&spec)?);
+        wait_until_running(bottle, wine, timeout, poll, &spec)?;
+        true
+    };
+    let left = timeout.saturating_sub(started_at.elapsed());
+    if wait_until_signed_in(bottle, wine, left, poll)? && started {
+        // Steam reports the account as soon as it logs on; give it a moment
+        // to finish the log-on before a game asks it for the user.
+        std::thread::sleep(poll);
     }
-    let steam = find_steam(bottle)?;
-    prepare_client_dxvk_logged(layout, bottle, &steam)?;
-    let (args, _) = client::silent_client_args(&[]);
-    let spec = client_spec(bottle, wine, &steam, args);
-    tracing::info!("starting Steam in bottle {}", bottle.config.name);
-    if !status.server {
-        bottle.record_session_display(display.map(Display::signature).as_deref());
+    Ok(started)
+}
+
+/// Wait until Steam reports a signed-in account ([`active_user`] non-zero),
+/// polling every `poll` up to `timeout`. A game started before that finds no
+/// Steam user: Rise of Nations then quits and crashes in its exit code
+/// (`SteamAuthentication::CancelSteamAuthTicket` on a null pointer, seen
+/// 2026-10-08 when it started 5 s after Steam and 7 s before Steam logged
+/// on). Returns `true` if it had to wait, `false` when the account was
+/// already signed in or Steam records none.
+///
+/// # Errors
+/// [`crate::Error::Command`] when nobody signs in within `timeout`.
+fn wait_until_signed_in(
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    timeout: Duration,
+    poll: Duration,
+) -> crate::Result<bool> {
+    let deadline = Instant::now().checked_add(timeout);
+    let mut waited = false;
+    loop {
+        match active_user(bottle, wine)? {
+            Some(0) => {}
+            None | Some(_) => return Ok(waited),
+        }
+        if !waited {
+            tracing::warn!(
+                "waiting for Steam to sign in to your account in bottle {} (if a Steam window asks, sign in there)",
+                bottle.config.name
+            );
+            waited = true;
+        }
+        let left = deadline.map_or(poll, |deadline| {
+            deadline.saturating_duration_since(Instant::now())
+        });
+        if left.is_zero() {
+            return Err(Error::Command {
+                program: "steam.exe".to_owned(),
+                status: format!(
+                    "is running but nobody signed in within {timeout:?}; sign in in the Steam window (`uncork steam start --bottle {}` shows it), then run the command again",
+                    bottle.config.name
+                ),
+                log_hint: String::new(),
+            });
+        }
+        std::thread::sleep(poll.min(left));
     }
-    reap_in_background(crate::process::spawn(&spec)?);
-    wait_until_running(bottle, wine, timeout, poll, &spec)?;
-    Ok(true)
 }
 
 /// [`ensure_client_dxvk`] with the bottle's DXVK: its `graphics.dxvk` pin,
@@ -2388,6 +2463,97 @@ mod tests {
         for stderr in ["", "\n", "wine client error:0: version mismatch\n"] {
             assert!(!is_reg_message(stderr), "{stderr:?}");
         }
+    }
+
+    #[test]
+    fn start_waits_until_steam_signs_in() {
+        let fx = Fixture::new();
+        fx.install_steam();
+        let mut fx = fx;
+        let started = start_if_needed(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            None,
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        assert!(started);
+        let signed_in = fx.position("/v ActiveUser |");
+        let start = fx.position("steam.exe -silent -nofriendsui |");
+        assert!(start < signed_in, "{:#?}", fx.calls());
+        assert_eq!(
+            active_user(&fx.bottle, &fx.wine).unwrap(),
+            Some(0x1a94_98de)
+        );
+    }
+
+    #[test]
+    fn a_client_that_never_signs_in_is_an_error_naming_the_fix() {
+        let fx = Fixture::new();
+        fx.install_steam();
+        fx.flag("no-signin");
+        let mut fx = fx;
+        let err = start_if_needed(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            None,
+            Duration::from_millis(200),
+            Duration::from_millis(10),
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("nobody signed in"), "{message}");
+        assert!(message.contains("uncork steam start --bottle"), "{message}");
+    }
+
+    #[test]
+    fn a_running_but_signed_out_client_is_waited_for() {
+        let fx = Fixture::new();
+        fx.install_steam();
+        fx.flag("server");
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fs::write(fx.state.join("user"), "0x0").unwrap();
+        let mut fx = fx;
+        let err = start_if_needed(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            None,
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("nobody signed in"), "{err}");
+        assert!(
+            !fx.calls()
+                .iter()
+                .any(|call| call.contains("steam.exe -silent")),
+            "a running client is not started again: {:#?}",
+            fx.calls()
+        );
+    }
+
+    #[test]
+    fn a_client_that_records_no_account_is_not_waited_for() {
+        let fx = Fixture::new();
+        fx.install_steam();
+        fx.flag("server");
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        let mut fx = fx;
+        let started = start_if_needed(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            None,
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        assert!(!started);
+        assert_eq!(active_user(&fx.bottle, &fx.wine).unwrap(), None);
     }
 
     #[test]

@@ -158,19 +158,34 @@ pub const ACTIVE_PROCESS_KEY: &str = r"HKCU\Software\Valve\Steam\ActiveProcess";
 /// end in `\r\n`, as Wine's `reg` writes them.
 #[must_use]
 pub fn parse_active_pid(reg_query_output: &str) -> Option<u32> {
+    parse_active_value(reg_query_output, "pid")
+}
+
+/// Value under [`ACTIVE_PROCESS_KEY`] holding the signed-in account's 32-bit
+/// id. Steam writes 0 when it starts and the account id once someone has
+/// signed in; a game that starts before that finds no Steam user (Rise of
+/// Nations then quits and crashes in its exit code).
+pub const ACTIVE_USER_VALUE: &str = "ActiveUser";
+
+/// Parse the output of `wine reg query <ACTIVE_PROCESS_KEY> /v <name>` for
+/// the DWORD value `name` (matched ignoring ASCII case), as
+/// [`parse_active_pid`] does for `pid`. `None` when no such line is present
+/// or its value is not a number.
+#[must_use]
+pub fn parse_active_value(reg_query_output: &str, name: &str) -> Option<u32> {
     reg_query_output
         .lines()
-        .find_map(pid_value)
+        .find_map(|line| named_value(line, name))
         .and_then(parse_dword)
 }
 
-/// The data field of a `pid    REG_<type>    <data>` line.
-fn pid_value(line: &str) -> Option<&str> {
+/// The data field of a `<name>    REG_<type>    <data>` line.
+fn named_value<'a>(line: &'a str, wanted: &str) -> Option<&'a str> {
     let mut fields = line.split_whitespace();
     let name = fields.next()?;
     let kind = fields.next()?;
     let data = fields.next()?;
-    (name.eq_ignore_ascii_case("pid") && kind.starts_with("REG_")).then_some(data)
+    (name.eq_ignore_ascii_case(wanted) && kind.starts_with("REG_")).then_some(data)
 }
 
 fn parse_dword(data: &str) -> Option<u32> {
@@ -353,6 +368,24 @@ mod tests {
                       ActiveUser    REG_DWORD    0x0\n    SteamClientDll    REG_SZ    \
                       C:\\Program Files (x86)\\Steam\\steamclient.dll\n    pid    REG_DWORD    0x10\n";
         assert_eq!(parse_active_pid(output), Some(16));
+    }
+
+    #[test]
+    fn active_user_reads_the_signed_in_account() {
+        let full = "HKEY_CURRENT_USER\\Software\\Valve\\Steam\\ActiveProcess\r\n    \
+                    ActiveUser    REG_DWORD    0x1a9498de\r\n    pid    REG_DWORD    0x20\r\n";
+        assert_eq!(
+            parse_active_value(full, ACTIVE_USER_VALUE),
+            Some(0x1a94_98de)
+        );
+        assert_eq!(parse_active_value(full, "activeuser"), Some(0x1a94_98de));
+        let starting = "    ActiveUser    REG_DWORD    0x0\r\n";
+        assert_eq!(parse_active_value(starting, ACTIVE_USER_VALUE), Some(0));
+        assert_eq!(
+            parse_active_value("    pid    REG_DWORD    0x20\r\n", ACTIVE_USER_VALUE),
+            None,
+            "a missing value is not 'nobody signed in'"
+        );
     }
 
     #[test]

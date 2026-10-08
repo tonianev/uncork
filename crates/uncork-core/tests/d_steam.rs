@@ -336,8 +336,8 @@ fn ensure_running_leaves_a_running_client_alone() {
     .unwrap();
     assert_eq!(
         fx.calls().len(),
-        2,
-        "one probe and one query, no start: {:#?}",
+        3,
+        "one probe, the pid and sign-in queries, no start: {:#?}",
         fx.calls()
     );
     assert!(
@@ -812,21 +812,30 @@ fn direct_games_reuse_a_running_client() {
     assert!(outcome.child.take().unwrap().wait().unwrap().success());
     assert!(!outcome.started_steam);
     let calls = fx.calls();
-    assert_eq!(calls.len(), 4, "{calls:#?}");
+    assert_eq!(calls.len(), 5, "{calls:#?}");
     assert!(calls[0].starts_with("wineserver -k0"), "{}", calls[0]);
-    assert!(calls[1].starts_with("wine reg query"), "{}", calls[1]);
-    assert!(calls[2].starts_with("wineserver -k0"), "{}", calls[2]);
     assert!(
-        calls[3].starts_with(&format!(
+        calls[1].contains("reg query") && calls[1].contains("/v pid"),
+        "{}",
+        calls[1]
+    );
+    assert!(
+        calls[2].contains("reg query") && calls[2].contains("/v ActiveUser"),
+        "the sign-in check: {}",
+        calls[2]
+    );
+    assert!(calls[3].starts_with("wineserver -k0"), "{}", calls[3]);
+    assert!(
+        calls[4].starts_with(&format!(
             "wine {} |",
             dir.join("riseofnations.exe").display()
         )),
         "{}",
-        calls[3]
+        calls[4]
     );
     assert!(
-        calls[3].contains(" DXMT_LOG_LEVEL=none "),
+        calls[4].contains(" DXMT_LOG_LEVEL=none "),
         "auto picked DXMT: {}",
-        calls[3]
+        calls[4]
     );
 }
