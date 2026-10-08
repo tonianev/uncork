@@ -9,6 +9,11 @@
 /// since 2026-01-01) still installs under `Program Files (x86)`.
 pub const STEAM_DIR: &str = "Program Files (x86)/Steam";
 
+/// The client executable in [`STEAM_DIR`], as Valve's installer names it.
+/// Wine paths are case-insensitive, so Uncork matches it ignoring ASCII case
+/// ([`crate::SteamInstall::find`]) and uses the name found on disk.
+pub const STEAM_EXE: &str = "Steam.exe";
+
 /// Valve's installer, primary URL first. The akamai host is the one Valve's
 /// own download page links.
 pub const INSTALLER_URLS: &[&str] = &[

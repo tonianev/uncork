@@ -260,6 +260,25 @@ impl InstalledApp {
     }
 }
 
+/// The file in `root` named [`client::STEAM_EXE`] ignoring ASCII case; with
+/// several spellings (a case-sensitive volume), the first in byte order.
+fn client_exe_in(root: &Path) -> Option<PathBuf> {
+    let mut names: Vec<std::ffi::OsString> = fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .filter(|name| {
+            name.to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(client::STEAM_EXE))
+        })
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|name| root.join(name))
+        .find(|path| path.is_file())
+}
+
 /// A Windows Steam client installed inside a Wine prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SteamInstall {
@@ -272,20 +291,25 @@ pub struct SteamInstall {
 
 impl SteamInstall {
     /// Locate Steam in `prefix` at the default path ([`crate::client::STEAM_DIR`]).
-    /// Returns `None` when `steam.exe` is not there.
+    /// Returns `None` when the directory has no client executable: a file
+    /// named [`crate::client::STEAM_EXE`] in any ASCII case (Valve's
+    /// installer writes `Steam.exe`; a case-sensitive volume keeps that
+    /// spelling, so the name is matched, not assumed).
     #[must_use]
     pub fn find(prefix: &Path) -> Option<SteamInstall> {
         let root = prefix.join(paths::DRIVE_C).join(client::STEAM_DIR);
-        root.join("steam.exe").is_file().then(|| SteamInstall {
+        client_exe_in(&root).map(|_| SteamInstall {
             prefix: prefix.to_owned(),
             root,
         })
     }
 
-    /// `root/steam.exe`.
+    /// The client executable with its on-disk name (see
+    /// [`SteamInstall::find`]); `root/`[`crate::client::STEAM_EXE`] when it
+    /// is gone. Reads the directory on every call.
     #[must_use]
     pub fn exe(&self) -> PathBuf {
-        self.root.join("steam.exe")
+        client_exe_in(&self.root).unwrap_or_else(|| self.root.join(client::STEAM_EXE))
     }
 
     /// Library roots as macOS paths: `root` first, then every path in

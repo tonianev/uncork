@@ -5,7 +5,7 @@
 # Files in @STATE@ steer it:
 #   pid             the ActiveProcess pid `reg query` prints (absent: no key)
 #   reg-exit        exit with this status from `reg query` instead
-#   steam-hangs     `steam.exe` starts but never registers a pid
+#   steam-hangs     `Steam.exe` starts but never registers a pid
 #   shutdown-works  `steam.exe -shutdown` clears the pid
 #   no-steam-exe    the installer installs nothing
 state='@STATE@'
@@ -34,10 +34,10 @@ case "$1" in
     *SteamSetup.exe)
         if [ ! -f "$state/no-steam-exe" ]; then
             mkdir -p "$WINEPREFIX/drive_c/Program Files (x86)/Steam"
-            printf 'steam' > "$WINEPREFIX/drive_c/Program Files (x86)/Steam/steam.exe"
+            printf 'steam' > "$WINEPREFIX/drive_c/Program Files (x86)/Steam/Steam.exe"
         fi
         ;;
-    *steam.exe)
+    *[Ss]team.exe)
         case " $* " in
             *" -shutdown "*)
                 if [ -f "$state/shutdown-works" ]; then printf '0x0' > "$state/pid"; fi

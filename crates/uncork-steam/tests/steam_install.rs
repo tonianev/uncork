@@ -135,6 +135,20 @@ fn find_locates_steam_at_the_default_path() {
 }
 
 #[test]
+fn find_matches_the_installers_spelling_and_exe_keeps_it() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let root = dir.path().join("drive_c/Program Files (x86)/Steam");
+    write(&root.join("Steam.exe"), b"MZ");
+    let install = SteamInstall::find(dir.path()).expect("Steam.exe is found");
+    assert_eq!(install.root, root);
+    assert_eq!(
+        install.exe().file_name().and_then(|name| name.to_str()),
+        Some("Steam.exe"),
+        "the name on disk, not an assumed one"
+    );
+}
+
+#[test]
 fn find_requires_a_steam_exe_file() {
     let dir = tempfile::tempdir().expect("temporary directory");
     assert_eq!(SteamInstall::find(dir.path()), None);

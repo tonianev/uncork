@@ -196,7 +196,7 @@ fn install_with(
                 bottle
                     .drive_c()
                     .join(client::STEAM_DIR)
-                    .join("steam.exe")
+                    .join(client::STEAM_EXE)
                     .display()
             ),
             log_hint: format!(" (log: {})", log.display()),
