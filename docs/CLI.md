@@ -71,7 +71,7 @@ Options:
 
 ## uncork doctor
 
-The checks, their levels and their fixes are listed in [ARCHITECTURE.md](ARCHITECTURE.md#doctor). A missing DXVK is a warning: the Steam client's windows stay black without it.
+The checks, their levels and their fixes are listed in [ARCHITECTURE.md](ARCHITECTURE.md#doctor). A missing DXVK is a warning: the Steam client's windows stay black without it. So is a bottle whose registry has a Retina mode and DPI that disagree (`bottle-dpi`), read from its `user.reg`; the fix it names is `uncork bottle set <bottle> performance.retina=<its setting>`.
 
 ```text
 Check this Mac and the Uncork installation, and say how to fix problems
@@ -109,7 +109,9 @@ Options:
 
 ## uncork play
 
-Resolves the game as a profile id, a Steam app id, an exact name or a unique part of a name. The first of these steps that matches anything decides; several matches are an error that lists the profile ids to choose from. With no matching profile, an installed Steam app id is started directly. A Steam game starts in the launch mode its profile names ([STEAM.md](STEAM.md#launch-modes)); in `direct` mode it also gets `SteamAppId` and `SteamGameId` set to its app id. `--dry-run` prints the backend, the reason, warnings, DLL copies, INI edits, the log file and the exact command; with `--json` it prints the plan as JSON, the command's arguments as strings. A real launch prints the same warnings to stderr as `warning:` lines.
+Resolves the game as a profile id, a Steam app id, an exact name or a unique part of a name. The first of these steps that matches anything decides; several matches are an error that lists the profile ids to choose from. With no matching profile, an installed Steam app id is started directly. A Steam game starts in the launch mode its profile names ([STEAM.md](STEAM.md#launch-modes)); in `direct` mode it also gets `SteamAppId` and `SteamGameId` set to its app id. `--dry-run` prints the backend, the reason, warnings, DLL copies, the frame cap and where it comes from, INI edits (a value with a `{display.*}` placeholder shown resolved from the main display), the log file and the exact command; with `--json` it prints the plan as JSON, the command's arguments as strings. A real launch prints the same warnings to stderr as `warning:` lines.
+
+Every launch reads the main display with `system_profiler` (about a quarter of a second). When the bottle is running and its main display has changed since its Wine session started (a display plugged in or unplugged, another one made the main display), `play` stops the bottle first, saying so, so that Steam and the game start again in a session that sees the new display ([ARCHITECTURE.md](ARCHITECTURE.md#the-main-display)). After a real launch it notes that a game window that opened behind the terminal is in the Dock or behind Command-Tab: macOS does not let a background process bring a window to the front.
 
 `--wait` waits for the bottle's wineserver only when Steam does not run in the bottle, because the Steam client keeps it alive: in `direct` mode it waits for the game alone; in `applaunch` mode the process Uncork starts is the Steam client, so it waits until Steam exits; in `standalone` mode it waits for the game, then for the wineserver unless Steam runs.
 
@@ -181,7 +183,7 @@ Options:
 
 ## uncork run
 
-A Windows path (`C:\...`) is mapped into the bottle's `drive_c`; either way the file must exist. No profile applies: the backend comes from `--backend`, else the bottle's `graphics.backend`, else a scan of the executable. A program in a Windows system directory (`system32`, `syswow64`) is scanned without the DLLs beside it, which are Windows' own. The plan's warnings are printed to stderr as `warning:` lines. `--wait` waits for the program, then for the bottle's wineserver.
+A Windows path (`C:\...`) is mapped into the bottle's `drive_c`; either way the file must exist. No profile applies: the backend comes from `--backend`, else the bottle's `graphics.backend`, else a scan of the executable. A program in a Windows system directory (`system32`, `syswow64`) is scanned without the DLLs beside it, which are Windows' own. The plan's warnings are printed to stderr as `warning:` lines. `--wait` waits for the program, then for the bottle's wineserver. Like `play`, `run` restarts a running bottle whose main display has changed and ends with the note about windows behind the terminal.
 
 ```text
 Run a Windows program in a bottle
@@ -392,7 +394,7 @@ Commands:
   create  Create a bottle
   info    Show a bottle's settings and state
   set     Change a bottle setting, e.g. `graphics.backend=dxmt`, `performance.retina=true`,
-          `env.DXMT_LOG_LEVEL=info`
+          `performance.max_fps=60`, `env.DXMT_LOG_LEVEL=info`
   delete  Delete a bottle and everything installed in it
   import  Import an existing Wine prefix (CrossOver or Whisky bottle, plain WINEPREFIX)
   kill    Stop every Windows process in a bottle
@@ -463,24 +465,40 @@ Options:
 
 ## uncork bottle set
 
-Retina mode and the Windows version are also written to the prefix's registry. The registry is updated first and `uncork.toml` is saved only after that worked, so a failed change is retried by running the same command again; the change is refused while the bottle's Wine is not installed. After changing `performance.msync` or `wine`, stop anything running in the bottle with `uncork bottle kill` before the next launch.
+Retina mode, with the DPI that goes with it (96 off, 192 on), and the Windows version are also written to the prefix's registry. Wine reads them when a bottle starts, so when anything runs in the bottle, Uncork stops it first (the Steam client gets `-shutdown` and 15 s, then `wineserver --kill`) and says so; start Steam and the game again afterwards. The registry is updated first and `uncork.toml` is saved only after that worked, so a failed change is retried by running the same command again; the change is refused while the bottle's Wine is not installed. `performance.retina=<value>` also rewrites a registry whose Retina mode and DPI do not match `uncork.toml`, even when the value is unchanged. `performance.max_fps` takes frames per second, `0` for uncapped, or an empty value for the default, the main display's refresh rate. After changing `performance.msync` or `wine`, stop anything running in the bottle with `uncork bottle kill` before the next launch.
 
 ```text
 Change a bottle setting, e.g. `graphics.backend=dxmt`, `performance.retina=true`,
-`env.DXMT_LOG_LEVEL=info`
+`performance.max_fps=60`, `env.DXMT_LOG_LEVEL=info`.
+
+`performance.retina` (with the DPI that goes with it) and `windows_version` are also written into
+the prefix's registry, which Wine reads when the bottle starts, so whatever runs in the bottle
+(Steam included) is stopped first. Naming `performance.retina` also repairs a registry whose Retina
+mode and DPI disagree (`uncork doctor` reports it). `performance.max_fps` caps the frame rate (0 =
+uncapped; empty = the main display's refresh rate).
 
 Usage: uncork bottle set [OPTIONS] <NAME> <SETTINGS>...
 
 Arguments:
-  <NAME>         Bottle name
-  <SETTINGS>...  `key=value` pairs
+  <NAME>
+          Bottle name
+
+  <SETTINGS>...
+          `key=value` pairs
 
 Options:
-      --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games and --dry-run output)
-  -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
-  -h, --help        Print help
-  -V, --version     Print version
+      --json
+          Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games and
+          --dry-run output)
+
+  -v, --verbose...
+          More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 ```
 
 ## uncork bottle delete
@@ -504,7 +522,7 @@ Options:
 
 ## uncork bottle import
 
-Clones with APFS (`/bin/cp -c -R`) by default, falling back to a plain copy on volumes without clones. When the prefix has exactly one Windows user other than `Public` and it is not your macOS user name (CrossOver bottles use `crossover`), the bottle's `env` gets `USER` and `LOGNAME` set to it, so Wine keeps using that profile's AppData. A Steam `ActiveProcess` `pid` left in the copy's `user.reg` is reset to 0. A clone carries the original's saved Steam login, and when two copies use one login Steam can ask for a new sign-in in either of them ([STEAM.md](STEAM.md#known-issues)): import with `--move`, or expect to sign in again.
+Clones with APFS (`/bin/cp -c -R`) by default, falling back to a plain copy on volumes without clones. When the prefix has exactly one Windows user other than `Public` and it is not your macOS user name (CrossOver bottles use `crossover`), the bottle's `env` gets `USER` and `LOGNAME` set to it, so Wine keeps using that profile's AppData. A Steam `ActiveProcess` `pid` left in the copy's `user.reg` is reset to 0. The prefix's Retina mode is kept: `performance.retina` is on when its `user.reg` has `RetinaMode` on or a DPI of 192 or more (CrossOver's High Resolution Mode), and the matching pair is written to the bottle's registry right away. A clone carries the original's saved Steam login, and when two copies use one login Steam can ask for a new sign-in in either of them ([STEAM.md](STEAM.md#known-issues)): import with `--move`, or expect to sign in again.
 
 ```text
 Import an existing Wine prefix (CrossOver or Whisky bottle, plain WINEPREFIX)

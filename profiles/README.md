@@ -51,6 +51,13 @@ key = "SkipIntroMovies"
 value = "1"
 reason = "The intro videos are WMV through DirectShow and stall without GStreamer WMV decoders."
 
+[[ini]]
+file = '%APPDATA%\Microsoft Games\Rise of Nations\rise2.ini'
+section = "RISE OF NATIONS"
+key = "Windowed Width"
+value = "{display.width}"         # the main display's "looks like" width, resolved at launch
+reason = "A mode Wine reports, so the game keeps it."
+
 [compat]
 status = "untested"
 notes = "Needs the Steam client running in the same bottle; uncork play starts it."
@@ -105,7 +112,8 @@ Each key overrides the bottle's `[performance]` value for this game; omitted key
 
 | Key | Type | Meaning |
 |---|---|---|
-| `retina` | boolean | Ask for native Retina resolution. `RetinaMode` is a prefix-wide registry setting that a launch does not change, so a value that differs from the bottle's only produces a warning; `uncork bottle set <bottle> performance.retina=true` changes it |
+| `retina` | boolean | Ask for native Retina resolution. `RetinaMode`, with the DPI that goes with it, is a prefix-wide registry setting that a launch does not change, so a value that differs from the bottle's only produces a warning; `uncork bottle set <bottle> performance.retina=true` changes it, with the bottle stopped |
+| `max_fps` | integer | Frame-rate cap in frames per second for backends Uncork can cap (DXMT); `0` is uncapped. Without it the bottle's `performance.max_fps` applies, else the main display's refresh rate. Use a value that divides the display's refresh rate ([docs/PERFORMANCE.md](../docs/PERFORMANCE.md#frame-cap)) |
 | `metalfx` | boolean | Upscale with MetalFX where the backend supports it |
 | `avx` | boolean | Let Rosetta advertise AVX/AVX2 (`ROSETTA_ADVERTISE_AVX`) |
 
@@ -141,7 +149,7 @@ Zero or more INI keys enforced before every launch; see [INI edits](#ini-edits).
 | `file` | string | yes | The INI file, as a Windows-style path starting with a base: `%APPDATA%\`, `%LOCALAPPDATA%\`, `%USERPROFILE%\` or `%INSTALLDIR%\`. Both `\` and `/` are accepted |
 | `section` | string | yes | Section name without brackets, matched ignoring case |
 | `key` | string | yes | Key, matched ignoring case and surrounding whitespace |
-| `value` | string | yes | The value to write |
+| `value` | string | yes | The value to write. It may contain the placeholders `{display.width}`, `{display.height}` and `{display.refresh}`; see [INI edits](#ini-edits) |
 | `reason` | string | no | Why; shown by `uncork profile show` |
 
 ### `[compat]`
@@ -180,6 +188,7 @@ A profile with any of these problems is rejected (`cargo test -p uncork-core` ch
 - DXVK appears in `backend` or `fallbacks` while `geometry_shaders = true`.
 - `mode` is `direct` or `applaunch` without a `[steam]` table.
 - An `[[ini]] file` does not start with a known base, or contains `..`.
+- An `[[ini]] value` contains a `{...}` token other than `{display.width}`, `{display.height}` and `{display.refresh}`.
 
 ## INI edits
 
@@ -187,6 +196,7 @@ Many games keep settings in an INI file that profiles need to control, such as R
 
 - The base is resolved inside the bottle. `%APPDATA%`, `%LOCALAPPDATA%` and `%USERPROFILE%` are the prefix user's folders under `drive_c/users/<user>/`, where `<user>` is the bottle's `env.USER` if set (a bottle imported from CrossOver has `crossover`), else the one directory under `drive_c/users/` other than `Public`, else your macOS user name; `%INSTALLDIR%` is the game's install directory. Path components that exist on disk with different letter case are matched ignoring case.
 - If the file does not exist yet, nothing happens: many games create their INI on first run, so the edit takes effect from the second launch.
+- Placeholders in `value` are replaced from the main display, the one with the menu bar, which games under Wine use: `{display.width}` and `{display.height}` by its "looks like" size in points (1728 and 1117 on a 16-inch MacBook Pro, 2560 and 1440 on a 5K display at its default scaling), `{display.refresh}` by its refresh rate in whole Hz. That size is what a game that is not DPI-aware should use: it is a display mode Wine reports, and it is the size of a borderless window that covers the desktop. When the display cannot be read, an edit that needs it is skipped and the plan says so; `--dry-run` shows each value resolved.
 - An existing key is rewritten in place, keeping its original spelling. A missing key is appended at the end of its section; a missing section is appended at the end of the file.
 - Everything else is preserved byte for byte: line order, comments, unknown keys, CRLF or LF line endings, and the encoding (UTF-8 or ASCII, or UTF-16LE with a byte-order mark, written back the same way).
 - The file is written atomically, and only when something changed.

@@ -92,12 +92,12 @@ Never used: `steamwebhelper.exe` wrappers or renames, `Steam.cfg` update inhibit
 
 ## Launch modes
 
-A profile's `[launch] mode` chooses how a game starts; without a profile, `uncork play <appid>` uses `direct`. In every mode the profile's INI edits are applied first, and only to files that already exist.
+A profile's `[launch] mode` chooses how a game starts; without a profile, `uncork play <appid>` uses `direct`. In every mode the profile's INI edits are applied first, and only to files that already exist. Before that, a running bottle whose main display has changed since its Wine session started is stopped (the client gets `-shutdown` and 15 s, as below), because Wine reads the displays only when its wineserver starts; the client then starts again with the game ([ARCHITECTURE.md](ARCHITECTURE.md#the-main-display)).
 
 | Mode | What Uncork does | When |
 |---|---|---|
 | `direct` | If the client is not running: put DXVK in place, start the client with `-silent -nofriendsui`, and poll every 2 s until it reports running (up to 180 s). Then put the game's backend DLLs in place and start the game executable directly in the same prefix, with its own environment and DLL overrides, plus `SteamAppId` and `SteamGameId` set to the app id | Default. Works when the game does not need Steam to start it. Run on hardware: Rise of Nations, about 44 s from command to game with Steam starting first (2026-10-07) |
-| `applaunch` | If the client runs, send it `-shutdown` and give it 15 s (`steam::APPLAUNCH_SHUTDOWN_GRACE`) to exit, then stop the bottle with `wineserver --kill` and reset its `pid` ([Stopping](#detecting-and-stopping-the-client)). Put the game's backend DLLs and Steam's DXVK in place, then start `Steam.exe -silent -nofriendsui -applaunch <appid> <profile args> <args>` with the game's environment and wait until it reports running; the client then starts the game | Games whose DRM must be started by Steam. Unit-tested only |
+| `applaunch` | If the client runs, send it `-shutdown` and give it 15 s (`steam::SHUTDOWN_GRACE`) to exit, then stop the bottle with `wineserver --kill` and reset its `pid` ([Stopping](#detecting-and-stopping-the-client)). Put the game's backend DLLs and Steam's DXVK in place, then start `Steam.exe -silent -nofriendsui -applaunch <appid> <profile args> <args>` with the game's environment and wait until it reports running; the client then starts the game | Games whose DRM must be started by Steam. Unit-tested only |
 | `standalone` | Start the executable without Steam | DRM-free and non-Steam games. Unit-tested only |
 
 Steam sets `SteamAppId` and `SteamGameId` for the games it starts, and Steamworks reads them to know which app it is. A game started directly gets them from Uncork, so it does not need a `steam_appid.txt` and does not ask Steam to start it again with the client's environment. A value the bottle's `env`, the profile's `env` or `--env` sets wins; `--dry-run` shows them (`SteamAppId=287450` and `SteamGameId=287450` for Rise of Nations, checked 2026-10-07). In `applaunch` mode Steam sets them itself.
@@ -120,6 +120,8 @@ The client sets the `pid` on start and clears it on a clean exit. A client that 
 - After Uncork kills a client, it writes the `pid` back to 0 with `wine reg add ... /t REG_DWORD /d 0 /f` (`steam::forget_client`).
 
 `steam.exe -shutdown` is not a reliable way to stop the client: on 2026-10-07 it did not stop it within 60 s. Uncork therefore stops the client in steps (`steam::stop`): send `-shutdown`, poll every 2 s up to a timeout, then run `wineserver --kill`, which ends every process in the bottle, games included, and reset the `pid`. `applaunch` uses a 15 s timeout for this, so a client that ignores `-shutdown` costs 15 s rather than the 180 s start timeout. To stop Steam by hand, run `uncork bottle kill <bottle>`: it runs `wineserver --kill` at once and, when Steam is installed in the bottle, resets the `pid`, also when nothing was running (verified 2026-10-07).
+
+The same steps stop a whole bottle when Uncork must restart it (`steam::stop_bottle`): before `uncork bottle set` changes Retina mode, the DPI or the Windows version, which Wine reads only when a wineserver starts, and before a game starts on a main display that changed while the bottle ran. After the client, `wineserver --kill` ends whatever is left, the `pid` is reset, and Uncork waits for the wineserver to exit.
 
 ### msync and Steam
 

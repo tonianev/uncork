@@ -44,9 +44,9 @@ Deliverables:
 - First-hand compatibility reports for Rise of Nations: Extended Edition, recorded in its profile.
 - Answers to the open questions marked M1 below, written into [STEAM.md](STEAM.md) and [PERFORMANCE.md](PERFORMANCE.md).
 
-### Progress (2026-10-07)
+### Progress (2026-10-07 and 2026-10-08)
 
-On the development Mac (MacBook Pro, M5 Max, macOS 27.0.1, Rosetta installed), in two sessions: the first with a Steam bottle imported from CrossOver, the second with a new bottle and a fresh Steam install, then a recheck with a release build that has the fixes listed below. Details and numbers are in the [README](../README.md#verified-on).
+On the development Mac (MacBook Pro, M5 Max, macOS 27.0.1, Rosetta installed), in three sessions: the first with a Steam bottle imported from CrossOver, the second with a new bottle and a fresh Steam install, then a recheck with a release build that has the fixes listed below; the third, on 2026-10-08, on Rise of Nations' full screen on the built-in display. Details and numbers are in the [README](../README.md#verified-on).
 
 | Done | Evidence |
 |---|---|
@@ -58,6 +58,8 @@ On the development Mac (MacBook Pro, M5 Max, macOS 27.0.1, Rosetta installed), i
 | A fresh Steam install: `bottle create` then `steam install` downloaded Valve's installer (it matched the pinned SHA-256), installed `Steam.exe`, and the client's first start downloaded 336 MB and showed the full sign-in window on app-local DXVK within about a minute | Screen; [STEAM.md](STEAM.md#the-first-start) |
 | After the fixes: `doctor` reports DXVK ok; `inspect` reports Rise of Nations' facts and DXMT; `play rise-of-nations --dry-run` sets `SteamAppId` and `SteamGameId`; a command right after `bottle create` works; `run` of `syswow64\cmd.exe` no longer warns about Direct3D 12 | [README](../README.md#verified-on) |
 | Game Mode bundles start the game through LaunchServices, but Rise of Nations crashed at startup in 3 of 5 bundle launches; Game Mode stays off and is not recommended | [PERFORMANCE.md](PERFORMANCE.md#game-mode) |
+| 2026-10-08: the cropped, offset full screen explained. The imported bottle had `RetinaMode` `n` next to CrossOver's 192 DPI, so the game saw a half-size screen. With a consistent pair (Retina on with 192 DPI, or off with 96) and a fresh Wine session, Rise of Nations ran as a borderless 1728x1117 window at (0,0) on the built-in display: 8 of 8 launches without a crash, 3 of them through Game Mode bundles, about 113 to 118 FPS at the main menu | [PERFORMANCE.md](PERFORMANCE.md#retina-mode-and-dpi) |
+| 2026-10-08: Wine reads Retina mode, the DPI and the displays only when its wineserver starts; changing them while Steam ran gave stale window sizes and crashes until the wineserver restarted. DXMT runs uncapped after a game leaves exclusive full screen unless `DXMT_CONFIG` caps it | [ARCHITECTURE.md](ARCHITECTURE.md#the-main-display), [PERFORMANCE.md](PERFORMANCE.md#frame-cap) |
 
 Changes made during the first session, now in `main`:
 
@@ -79,6 +81,14 @@ Changes made during and after the second session, now in `main` (commit b8f7255,
 - A backend counts as available only when the runtime can activate it, so automatic choice never picks D3DMetal on the catalog's runtime; `inspect` lists why it passed over the others.
 - Plan warnings are printed on real launches; several matching profiles are an error that names them; `--json` shows command arguments as strings; Ctrl-D at a download prompt means no; `doctor` warns when DXVK is missing; Windows system directories are not scanned as a program's own DLLs, and the large-address-aware hint is limited to programs with a graphics API.
 
+Changes made after the third session (2026-10-08), unit-tested with fakes and not yet run on real hardware:
+
+- Retina mode and the DPI are written as a pair (96 without Retina mode, 192 with it); `bottle set` writes them with the bottle stopped; `bottle import` keeps a CrossOver bottle's Retina choice; `doctor` reports a bottle whose pair disagrees (`bottle-dpi`).
+- Launches read the main display with `system_profiler`. Profile INI values can use `{display.width}`, `{display.height}` and `{display.refresh}`, and the Rise of Nations profile runs the game as a borderless window at the display's "looks like" size (`Fullscreen=2`).
+- DXMT launches are capped at the main display's refresh rate (`performance.max_fps` overrides it); MetalFX stays off on DXMT in a Retina bottle.
+- A running bottle whose main display has changed since it started is restarted before `play` and `run`.
+- After a launch Uncork says where to find a window that opened behind the terminal.
+
 Left for M1:
 
 - A fresh `uncork setup --yes` on a clean Mac with a fresh `UNCORK_HOME`: the components' network downloads, the first sign-in and the update after it, and `doctor` without failures there. Valve's installer and the client's first start up to the sign-in window have run in a new bottle on the development Mac.
@@ -86,7 +96,9 @@ Left for M1:
 - A full match: the skirmish, tutorial, audio, lobby browser and alt-tab items below.
 - The Metal HUD benchmark on DXMT and on WineD3D.
 - Game Mode: why Rise of Nations crashes at startup through a bundle, then whether Game Mode turns on and what it changes ([open questions 9 and 15](#open-questions)).
-- Full screen on high-resolution external displays: Rise of Nations renders cropped and offset on a 5K display with Retina mode off; windowed works and is the recommendation until this is fixed ([open question 16](#open-questions)).
+- The borderless window on a 5K external display as the main display, and what the camera notch hides at the top centre during a match on the built-in display ([open questions 16 and 18](#open-questions)).
+- Running the changes made after the third session on the development Mac: a bottle repaired with `bottle set`, a game launched after a display change, the frame cap on a 60 Hz external display.
+- Whether a game started from the terminal the user is typing in comes to the front ([open question 19](#open-questions)).
 - Steam asking to sign in again when several copies of a bottle share one login ([open question 17](#open-questions)).
 - Setting the profile's `[compat]` status from those reports; until then it stays `untested`.
 
@@ -202,12 +214,14 @@ Each is answered by a hands-on test and recorded in the document named.
 | 6 | What causes the "Setting up animals" tutorial hang: the C runtime, the UCRT or something else? | M1 | Open | the profile |
 | 7 | Do the WMV intros and the menu background video play with GStreamer and gst-libav? | M1 | Open; the profile skips the intros (`SkipIntroMovies=1`, applied) | the profile |
 | 8 | Does Rise of Nations exceed 2 GiB without large-address-awareness? | M1 | Open | [PERFORMANCE.md](PERFORMANCE.md#large-address-aware) |
-| 9 | Does a games-category wrapper that `exec`s Wine get Game Mode, and with which `CaptureDisplaysForFullscreen` setting? | M1 | Open. The wrapper starts the game under LaunchServices with the plan's environment, but Game Mode needs full screen, which renders cropped (question 16), so its effect could not be measured | [PERFORMANCE.md](PERFORMANCE.md#game-mode) |
+| 9 | Does a games-category wrapper that `exec`s Wine get Game Mode, and with which `CaptureDisplaysForFullscreen` setting? | M1 | Open. The wrapper starts the game under LaunchServices with the plan's environment. Full screen rendered cropped on 2026-10-07 (question 16); the borderless window that renders correctly since 2026-10-08 has not been measured with Game Mode on and off | [PERFORMANCE.md](PERFORMANCE.md#game-mode) |
 | 10 | In `applaunch` mode, do Steam's own processes still render with a game backend in their environment? | M1 | Not run. With a DXMT game the web helper would pair DXMT's `dxgi` with DXVK's `d3d11`, which fails to create swapchains, so black Steam windows are expected | [STEAM.md](STEAM.md#launch-modes) |
 | 11 | Do GitHub's hosted arm64 runners expose a Metal device usable for DXMT smoke tests? | M2 | Open | [RUNTIME.md](RUNTIME.md) |
 | 12 | Under `game-test-tool` and macOS 28 betas, do `wineserver`, `explorer.exe` and `steamwebhelper.exe` run, and do 32-bit code segments survive? | M5 | Open | this file |
 | 13 | Is the ARM64 cross-architecture capability available to open-source projects distributing with Developer ID? | M5 | Open | this file |
 | 14 | Why does Steam's embedded store page stay black while the rest of its web UI renders on DXVK? | M1 | Open | [STEAM.md](STEAM.md#known-issues) |
-| 15 | Why does Rise of Nations crash at startup when LaunchServices starts it through a Game Mode bundle? | M1 | Crashed in 3 of 5 bundle launches with an unhandled page fault reading address 0 in the game's code; never in 6 or more direct launches; not with Wine's `loaddll` and exception-handling debug channels on, so timing-sensitive. Cause open | [PERFORMANCE.md](PERFORMANCE.md#game-mode) |
-| 16 | Why does Rise of Nations in full screen render cropped and offset on a 5K external display with Retina mode off, and does Retina mode, `CaptureDisplaysForFullscreen` or the game's resolution setting fix it? | M1 | Seen 2026-10-07; windowed works. Fixes not tried yet | [PERFORMANCE.md](PERFORMANCE.md#retina-mode), [COMPATIBILITY.md](COMPATIBILITY.md#known-issues) |
+| 15 | Why does Rise of Nations crash at startup when LaunchServices starts it through a Game Mode bundle? | M1 | Crashed in 3 of 5 bundle launches on 2026-10-07 with an unhandled page fault reading address 0 in the game's code; never in 6 or more direct launches; not with Wine's `loaddll` and exception-handling debug channels on, so timing-sensitive. On 2026-10-08, with a consistent Retina mode and DPI and a fresh Wine session, 3 of 3 bundle launches started without a crash; whether the earlier crashes came from the pair that disagreed is not confirmed | [PERFORMANCE.md](PERFORMANCE.md#game-mode) |
+| 16 | Why does Rise of Nations in full screen render cropped and offset on a 5K external display with Retina mode off, and does Retina mode, `CaptureDisplaysForFullscreen` or the game's resolution setting fix it? | M1 | Answered on the built-in display on 2026-10-08: the bottle's Retina mode and DPI disagreed (`RetinaMode` `n`, 192 DPI), so the game saw a half-size screen. With a consistent pair, a borderless window (`Fullscreen=2`) at the display's "looks like" size renders the whole picture. A 5K external display as the main display has not been tried with these settings | [PERFORMANCE.md](PERFORMANCE.md#retina-mode-and-dpi), [COMPATIBILITY.md](COMPATIBILITY.md#known-issues) |
 | 17 | Does Steam invalidate a saved login when several copies of a bottle use it, and how should `bottle import` handle that? | M1 | An imported clone stopped signing in by itself after several copies had used one login: connected, never logged on with the saved session. Probably the saved login was rotated; not confirmed. For now the docs recommend `--move` or signing in again | [STEAM.md](STEAM.md#known-issues) |
+| 18 | On a MacBook Pro with a notch, what does the 185x32-point strip behind the camera hide at the top centre of a borderless desktop-size window during a match? | M1 | Open | [COMPATIBILITY.md](COMPATIBILITY.md#known-issues) |
+| 19 | Does a game started from the terminal the user is typing in come to the front? A process cannot bring itself or another app to the front from the background on current macOS (`NSRunningApplication.activate` and `lsappinfo setfront` return `permErr`) | M1 | Open; Uncork prints where to find the window after each launch | [CLI.md](CLI.md#uncork-play) |

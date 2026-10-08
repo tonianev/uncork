@@ -18,9 +18,10 @@ This document lists every setting Uncork uses to make games run fast on Apple Si
 |---|---|---|---|
 | `performance.msync` | On. Effective only when the Wine runtime has the `msync` feature, which the catalog's runtime has | Sets `WINEMSYNC=1` for every process in the bottle, wineserver included | [msync](#msync) |
 | `performance.avx` | On | Sets `ROSETTA_ADVERTISE_AVX=1` | [AVX under Rosetta](#avx-under-rosetta) |
-| `performance.retina` | Off | Mac driver `RetinaMode` | [Retina mode](#retina-mode) |
+| `performance.retina` | Off | Mac driver `RetinaMode`, and the DPI to match: `LogPixels` 96 off, 192 on | [Retina mode and DPI](#retina-mode-and-dpi) |
+| `performance.max_fps` | The main display's refresh rate, rounded (60 when unknown) | `DXMT_CONFIG=d3d11.preferredMaxFrameRate=<n>` for DXMT games; `0` uncaps. A profile's `max_fps` wins over the bottle's | [Frame cap](#frame-cap) |
 | `performance.hud` | Off | Sets `MTL_HUD_ENABLED=1` | [Metal HUD](#metal-performance-hud) |
-| `performance.metalfx` | Off | `DXMT_METALFX_SPATIAL_SWAPCHAIN=1` (DXMT) or `D3DM_ENABLE_METALFX=1` (D3DMetal) | [MetalFX](#metalfx) |
+| `performance.metalfx` | Off | `DXMT_METALFX_SPATIAL_SWAPCHAIN=1` (DXMT, not in a Retina bottle) or `D3DM_ENABLE_METALFX=1` (D3DMetal) | [MetalFX](#metalfx) |
 | `performance.game_mode` | Off (experimental, not recommended) | Launch through a games-category app bundle; `--game-mode` does it for one launch. Rise of Nations crashed at startup in 3 of 5 such launches | [Game Mode](#game-mode) |
 | Logging | Off | `WINEDEBUG=-all`, `DXMT_LOG_LEVEL=none`, `DXVK_LOG_LEVEL=none`, `MVK_CONFIG_LOG_LEVEL=1`; `--wine-debug <channels>` turns Wine channels and backend logs on for one launch | [Logging](#logging) |
 | Shader caches | Per bottle | `DXMT_SHADER_CACHE_PATH=<bottle>/cache/dxmt`, `DXVK_STATE_CACHE_PATH=<bottle>/cache/dxvk` | [Shader caches](#shader-caches) |
@@ -31,10 +32,11 @@ This document lists every setting Uncork uses to make games run fast on Apple Si
 
 ## Measured so far
 
-First-hand numbers, 2026-10-07: MacBook Pro with Apple M5 Max, macOS 27.0.1 (26A434), Wine `winecx-gptk-4.7.3`, DXMT 0.80, DXVK-macOS 1.10.3, msync on, Retina off. They are single observations, not benchmarks run by [the procedure below](#how-to-benchmark).
+First-hand numbers, 2026-10-07 and 2026-10-08: MacBook Pro with Apple M5 Max, macOS 27.0.1 (26A434), Wine `winecx-gptk-4.7.3`, DXMT 0.80, DXVK-macOS 1.10.3, msync on, Retina off unless noted. They are single observations, not benchmarks run by [the procedure below](#how-to-benchmark).
 
 | What | Result |
 |---|---|
+| 2026-10-08: Rise of Nations, main menu, DXMT 0.80, borderless window at 1728x1117 on the built-in display (120 Hz), Metal HUD | About 113 to 118 FPS. Both consistent pairs (Retina mode on with 192 DPI, off with 96 DPI) render this game, which is not DPI-aware, at the display's "looks like" size |
 | Rise of Nations: Extended Edition, main menu, DXMT 0.80, windowed 1728x1117, Metal HUD | 120 FPS (the display's cap), GPU time 0.48 ms per frame, frame interval 8.33 ms; HUD reported "Composited" presentation and Game Mode off. Run by hand with the DLLs and overrides `uncork play` uses, with `Fullscreen=0` set in `rise2.ini` for the test |
 | `uncork play rise-of-nations --hud`, Steam not running | About 44 s from the command to the game, Steam's start included |
 | Signed-in Steam client, start to running (`ActiveProcess` `pid` set) | About 18 s, by hand |
@@ -44,7 +46,7 @@ First-hand numbers, 2026-10-07: MacBook Pro with Apple M5 Max, macOS 27.0.1 (26A
 | `wine C:\windows\syswow64\cmd.exe /c ver` (32-bit) | 1.2 s, by hand |
 | Fresh Steam install, first start to the sign-in window | About a minute, including the client's 336 MB download |
 
-Not measured yet: a match or skirmish, the 99th-percentile frame time, WineD3D on the same scene, Game Mode (it needs full screen, which rendered cropped; see [Game Mode](#game-mode)), and a long session.
+Not measured yet: a match or skirmish, the 99th-percentile frame time, WineD3D on the same scene, Game Mode's effect ([Game Mode](#game-mode)), the frame cap on a 60 Hz external display, and a long session.
 
 ## msync
 
@@ -74,11 +76,17 @@ Rosetta translates AVX and AVX2 but not AVX-512 ([Apple](https://developer.apple
 - Never infer AVX support from `sysctl hw.optional.avx*`: under Rosetta those read 0 whether or not AVX is advertised, although AVX and AVX2 execute.
 - Turn it off per game (`[performance] avx = false`) if a game misbehaves with AVX advertised; no such game is known yet.
 
-## Retina mode
+## Retina mode and DPI
 
-With `RetinaMode` on, Wine's Mac driver gives Windows programs the full backing-pixel resolution, so a game renders up to four times the pixels (twice in each direction). The key is read only prefix-wide, because DPI must agree across processes ([macdrv_main.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/winemac.drv/macdrv_main.c)). Default off. Turn it on for a game whose UI scales and that has GPU headroom; leave it off for pixel-based UIs such as Rise of Nations'. Because it is prefix-wide it also changes the Steam client. For the same reason a launch never changes it: `uncork bottle set <bottle> performance.retina=true` rewrites the bottle's registry, while `--retina` or a profile's `retina` that differs from the bottle's only adds a warning to the plan.
+With `RetinaMode` on, Wine's Mac driver gives Windows programs the full backing-pixel resolution, so a game renders up to four times the pixels (twice in each direction). The key is read only prefix-wide, because DPI must agree across processes ([macdrv_main.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/winemac.drv/macdrv_main.c)). Default off. Turn it on for a game whose UI scales and that has GPU headroom; leave it off for pixel-based UIs such as Rise of Nations'. Because it is prefix-wide it also changes the Steam client.
 
-Full screen on a high-resolution display is an open problem. On 2026-10-07 Rise of Nations in full screen on a 5K external display, with Retina mode off, rendered cropped and offset; windowed (`Fullscreen=0` in its `rise2.ini`) rendered correctly. Whether Retina mode, `CaptureDisplaysForFullscreen` or the game's resolution setting changes that has not been tested ([ROADMAP.md](ROADMAP.md#open-questions)). Play windowed for now.
+Retina mode and the DPI (`LogPixels` under `HKEY_CURRENT_USER\Control Panel\Desktop`) are a pair, and Uncork writes them together: 96 DPI without Retina mode, 192 with it, as CrossOver's High Resolution Mode does. A pair that disagrees breaks games that are not DPI-aware. On 2026-10-08 a bottle imported from CrossOver had `RetinaMode` `n` next to CrossOver's 192 DPI, and Rise of Nations saw an 864x558 screen while Wine's display modes were full size: its full-screen window was twice the screen, cropped at a negative offset, and its display-mode lookup could crash in `d3dgl.dll`. It looked the same as the cropped and offset full screen of 2026-10-07 on a 5K external display, which has not been tried again with a consistent pair. With either consistent pair, in a fresh Wine session, it started without a crash in a borderless 1728x1117 window at (0,0) showing the whole picture (8 launches, Game Mode bundles included). `uncork doctor` reports a bottle whose pair disagrees (`bottle-dpi`), `bottle import` keeps a CrossOver bottle's Retina choice and writes the matching DPI, and a plan warns about a pair that disagrees.
+
+Wine reads both when a wineserver starts. Changed while anything of the bottle runs (the Steam client keeps its wineserver alive), they gave stale window sizes and offsets and crashes until the wineserver restarted. So a launch never changes them: `uncork bottle set <bottle> performance.retina=true` stops what runs in the bottle, Steam included, then rewrites the registry, while `--retina` or a profile's `retina` that differs from the bottle's only adds a warning to the plan.
+
+Rise of Nations' profile runs the game as a borderless window (`Fullscreen=2`) at the main display's "looks like" size (`Windowed Width` and `Windowed Height` from `{display.width}` and `{display.height}`: 1728x1117 on a 16-inch MacBook Pro, 2560x1440 on a 5K display), not in exclusive full screen (`Fullscreen=1`), which switches the Mac's display mode. The size must be a mode Wine reports or the game replaces it, and the "looks like" size is one. The game draws its UI in pixels without scaling, so the native 3456x2234 would halve the HUD. A 5K external display as the main display has not been tried with these settings yet.
+
+DXMT's MetalFX swapchain upscales to the native pixel size; in Retina mode that is twice the native resolution for nothing, so a plan leaves `DXMT_METALFX_SPATIAL_SWAPCHAIN` off in a Retina bottle and says so.
 
 ## Metal performance HUD
 
@@ -100,15 +108,26 @@ Pass the extra variables with `-e`, for example `uncork play rise-of-nations --h
 | DXMT | `DXMT_ENABLE_NVEXT=1` | 64 only | Maps DLSS to the MetalFX temporal upscaler; set per game in a profile, never bottle-wide | [DXMT Vendor Extensions](https://github.com/3Shain/dxmt/wiki/Vendor-Extensions) |
 | D3DMetal | `D3DM_ENABLE_METALFX=1` | 64 only | Converts DLSS to MetalFX on macOS 26 and later. It also needs GPTK's `nvngx` and `nvapi64` modules in the prefix, which Uncork does not install yet | [GPTK 4.0b2 Read Me](https://github.com/Sikarugir-App/Sikarugir/blob/main/D3DMetal/4.0/Read%20Me.pdf) |
 
-`--metalfx` and `performance.metalfx` set the first and third rows. WineD3D and DXVK on MoltenVK have no MetalFX path.
+`--metalfx` and `performance.metalfx` set the first and third rows; the first is left off, with a plan warning, in a bottle with Retina mode on ([Retina mode and DPI](#retina-mode-and-dpi)). WineD3D and DXVK on MoltenVK have no MetalFX path.
 
-## Frame pacing and backend knobs
+## Frame cap
+
+DXMT paces frames itself (it turns the Metal layer's display sync off). Without a cap it paces to the refresh rate it reads when the game creates its swapchain, and after a game leaves exclusive full screen it runs uncapped (a DXMT 0.80 bug: the rate becomes `DBL_MAX`). So every DXMT launch gets `DXMT_CONFIG=d3d11.preferredMaxFrameRate=<n>`, where `n` is:
+
+1. the profile's `[performance] max_fps`, else
+2. the bottle's `performance.max_fps` (`uncork bottle set <bottle> performance.max_fps=60`), else
+3. the main display's refresh rate, rounded to whole Hz (120 on a MacBook Pro's built-in display, 60 on most external displays), else
+4. 60, when the refresh rate is unknown.
+
+`max_fps = 0` leaves the cap out. `n` must divide the display's refresh rate, so 60 is safe on both 60 and 120 Hz displays; an explicit value that does not divide it gets a plan warning. A `DXMT_CONFIG` in the bottle's or the profile's `env`, or from `-e`, replaces Uncork's. `--dry-run` prints the cap and where it came from. Other backends get no cap from Uncork; D3DMetal has `D3DM_MAX_FPS` (below).
+
+## Backend knobs
 
 These are not set by default; put them in a profile's `[env]` or pass them with `-e`.
 
 | Variable | Effect | Source |
 |---|---|---|
-| `DXMT_CONFIG="d3d11.preferredMaxFrameRate=60;"` | Caps the frame rate inside DXMT with Metal-controlled pacing. The value must divide the display's refresh rate (60 or 120 on a 120 Hz display) | [DXMT CUSTOMIZATION.md](https://github.com/3Shain/dxmt/blob/main/docs/CUSTOMIZATION.md) |
+| `DXMT_CONFIG` | DXMT's own options, `key=value` separated by `;`, for example `d3d11.metalSpatialUpscaleFactor=2`. Replaces the frame cap Uncork sets, so add `d3d11.preferredMaxFrameRate=<n>` to keep one | [DXMT CUSTOMIZATION.md](https://github.com/3Shain/dxmt/blob/main/docs/CUSTOMIZATION.md) |
 | `D3DM_MAX_FPS=<n>` | Frame-rate cap in D3DMetal | [GPTK 4.0b2 Read Me](https://github.com/Sikarugir-App/Sikarugir/blob/main/D3DMetal/4.0/Read%20Me.pdf) |
 | `D3DM_SUPPORT_DXR` | DirectX ray tracing in D3DMetal; default off on M1 and M2, on from M3 | same |
 | `D3DM_MTL4=0` | On macOS 27, D3DMetal's Direct3D 12 path uses Metal 4 by default; `0` falls back to Metal 3 | same |
@@ -138,10 +157,16 @@ Uncork writes these under `HKEY_CURRENT_USER\Software\Wine\Mac Driver` when it c
 
 | Key | Uncork writes | Why |
 |---|---|---|
-| `RetinaMode` | `n` unless `performance.retina` | See [Retina mode](#retina-mode) |
+| `RetinaMode` | `n` unless `performance.retina` | See [Retina mode and DPI](#retina-mode-and-dpi) |
 | `UseConfinementCursorClipping`, `CursorClippingLocksWindows` | `y` | Keeps the cursor inside the window, which RTS edge scrolling needs |
 | `AllowVerticalSync` | `y` | Lets games' vsync settings reach Metal |
 | `EnableAppNap` | `n` | App Nap throttles a backgrounded Steam client |
+
+The DPI that goes with Retina mode is written next to them, under `HKEY_CURRENT_USER\Control Panel\Desktop` and `HKEY_CURRENT_USER\Software\Wine\Fonts`:
+
+| Key | Uncork writes | Why |
+|---|---|---|
+| `LogPixels` (DWORD) | 96 without Retina mode, 192 with it | See [Retina mode and DPI](#retina-mode-and-dpi) |
 
 `CaptureDisplaysForFullscreen` is left at Wine's default (`n`); whether `y` helps exclusive-fullscreen games is an open question.
 
@@ -170,19 +195,20 @@ macOS gives a game Game Mode (priority CPU and GPU access, lower Bluetooth laten
 
 `--game-mode` on one launch, or `performance.game_mode = true` for a bottle (`uncork bottle set <bottle> performance.game_mode=true`), routes `direct` and `standalone` launches through a generated `apps/<id>.app` that LaunchServices opens with `/usr/bin/open -n -W`; its launcher `exec`s the Wine loader in place ([ARCHITECTURE.md](ARCHITECTURE.md#game-mode-experimental)). In `applaunch` mode the Steam client starts the game and no bundle is used. The manual run in [Measured so far](#measured-so-far) did not use a bundle, and the Metal HUD reported Game Mode off.
 
-Results on 2026-10-07 (M5 Max, macOS 27.0.1, Rise of Nations on DXMT 0.80):
+Results on 2026-10-07 and 2026-10-08 (M5 Max, macOS 27.0.1, Rise of Nations on DXMT 0.80):
 
 | What | Result |
 |---|---|
 | The bundle's launcher under LaunchServices | Works: a plan that ran `/usr/bin/env` through the bundle showed the plan's environment |
 | Rise of Nations through the bundle | Crashed at startup in 3 of 5 launches, with an unhandled page fault reading address 0 in the game's own code. It never crashed in 6 or more direct launches. With Wine's `loaddll` and exception-handling debug channels on, it did not crash through the bundle either, so the crash depends on timing |
-| Game Mode's effect | Not measurable: Game Mode needs full screen, and Rise of Nations in full screen rendered cropped and offset on a 5K external display with Retina mode off. Windowed works |
+| Rise of Nations through the bundle, 2026-10-08 | Started without a crash in 3 of 3 launches, in a borderless window at the display's size, with a consistent Retina mode and DPI (`RetinaMode` `y`, 192 DPI) and a fresh Wine session for each launch. Whether the 2026-10-07 crashes came from that bottle's Retina mode and DPI, which disagreed, is not confirmed |
+| Game Mode's effect | Not measured. On 2026-10-07 full screen rendered cropped and offset ([Retina mode and DPI](#retina-mode-and-dpi)); the borderless window that now renders correctly has not been measured with Game Mode on and off |
 
 So Game Mode stays experimental, off by default and not recommended. Open questions, to answer on real hardware:
 
-1. Why does Rise of Nations crash at startup when started through the bundle, and only then?
+1. Why did Rise of Nations crash at startup when started through the bundle on 2026-10-07, and only then? It did not on 2026-10-08 with a consistent Retina mode and DPI.
 2. Does macOS keep Game Mode for the bundle after its launcher `exec`s the Wine loader?
-3. Does Game Mode turn on with the Mac driver's window-level full screen, and does `CaptureDisplaysForFullscreen=y` change that? This needs full screen that renders correctly first ([Retina mode](#retina-mode)).
+3. Does Game Mode turn on for a borderless window at the display's size, or with the Mac driver's window-level full screen, and does `CaptureDisplaysForFullscreen=y` change that?
 4. Is there a measurable frame-time difference on Rise of Nations with Game Mode on versus off?
 
 ## Not used, and why
