@@ -1,8 +1,12 @@
-//! Windows registry edits applied to a bottle with `wine regedit /S`.
+//! Windows registry edits applied to a bottle with `wine regedit /S`, and
+//! reading values from Wine's registry files offline.
 //!
 //! Uncork renders edits to a `REGEDIT4` file inside the bottle's
 //! `drive_c/windows/temp/` and imports it with Wine's `regedit`, which works
-//! headless and is the same mechanism winetricks uses.
+//! headless and is the same mechanism winetricks uses. [`file_value`] reads
+//! a value from the text of a prefix's `user.reg` or `system.reg` without
+//! starting Wine (the files lag behind a running wineserver, which saves
+//! them lazily).
 
 use std::fmt::Write as _;
 
@@ -65,6 +69,115 @@ pub fn render(keys: &[RegKey]) -> String {
 
 /// `HKEY_CURRENT_USER\Software\Wine\Mac Driver`.
 pub const MAC_DRIVER_KEY: &str = r"HKEY_CURRENT_USER\Software\Wine\Mac Driver";
+
+/// A value as Wine's registry files (`user.reg`, `system.reg`) store it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum FileValue {
+    /// `"name"="text"` or `"name"=str(2):"text"`, escapes resolved.
+    Sz(String),
+    /// `"name"=dword:0000002a`.
+    Dword(u32),
+    /// Any other type (`hex:`, `hex(7):`, ...), not decoded.
+    Other,
+}
+
+/// Value `name` of key `key` in `text`, the contents of one of Wine's
+/// registry files, or `None` when the key or the value is not there.
+///
+/// `key` is relative to the file's root and written with single
+/// backslashes, for example `Software\Wine\Mac Driver` in `user.reg` (the
+/// file itself doubles them: `[Software\\Wine\\Mac Driver] 1696000000`).
+/// Key and value names are compared ignoring ASCII case, as Windows does.
+/// Escapes in names and strings (`\\`, `\"`, `\n`, `\r`, `\t`, `\0`,
+/// `\x<hex>`) are resolved. The default value (`@=`) is never matched, and
+/// a value continued on the next line (long `hex:` data) is reported as
+/// [`FileValue::Other`].
+#[must_use]
+pub fn file_value(text: &str, key: &str, name: &str) -> Option<FileValue> {
+    let mut in_key = false;
+    for line in text.lines() {
+        let line = line.trim_start();
+        if let Some(header) = line.strip_prefix('[') {
+            in_key = parse_quoted_until(header, ']')
+                .is_some_and(|(path, _)| path.eq_ignore_ascii_case(key));
+            continue;
+        }
+        if !in_key {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix('"') else {
+            continue;
+        };
+        let Some((value_name, rest)) = parse_quoted_until(rest, '"') else {
+            continue;
+        };
+        if !value_name.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        let Some(data) = rest.strip_prefix('=') else {
+            continue;
+        };
+        return Some(parse_file_data(data.trim_end()));
+    }
+    None
+}
+
+/// The data after `"name"=` in a registry file.
+fn parse_file_data(data: &str) -> FileValue {
+    let string = data
+        .strip_prefix("str(2):")
+        .or_else(|| data.strip_prefix("str(1):"))
+        .unwrap_or(data);
+    if let Some(quoted) = string.strip_prefix('"') {
+        return match parse_quoted_until(quoted, '"') {
+            Some((text, rest)) if rest.trim().is_empty() => FileValue::Sz(text),
+            _ => FileValue::Other,
+        };
+    }
+    match data.strip_prefix("dword:") {
+        Some(hex) => u32::from_str_radix(hex.trim(), 16).map_or(FileValue::Other, FileValue::Dword),
+        None => FileValue::Other,
+    }
+}
+
+/// Read an escaped name or string up to the unescaped `end` character:
+/// the unescaped text and what follows `end`. `None` when `end` never comes.
+fn parse_quoted_until(text: &str, end: char) -> Option<(String, &str)> {
+    let mut out = String::new();
+    let mut chars = text.char_indices();
+    while let Some((index, c)) = chars.next() {
+        if c == end {
+            return Some((out, &text[index + c.len_utf8()..]));
+        }
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let (_, escaped) = chars.next()?;
+        match escaped {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            '0' => out.push('\0'),
+            'x' => {
+                // Up to four hex digits, as Wine writes non-ASCII characters.
+                let digits: String = chars
+                    .clone()
+                    .map(|(_, c)| c)
+                    .take(4)
+                    .take_while(char::is_ascii_hexdigit)
+                    .collect();
+                for _ in 0..digits.len() {
+                    chars.next();
+                }
+                let code = u32::from_str_radix(&digits, 16).ok()?;
+                out.push(char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER));
+            }
+            other => out.push(other),
+        }
+    }
+    None
+}
 
 /// Append `text` as a double-quoted, escaped `.reg` string.
 fn push_quoted(out: &mut String, text: &str) {
@@ -220,6 +333,105 @@ mod tests {
         assert_eq!(
             render(&keys),
             "REGEDIT4\n\n[HKEY_CURRENT_USER\\A]\n\n[HKEY_CURRENT_USER\\B]\n"
+        );
+    }
+
+    /// The shape of a CrossOver bottle's `user.reg` with High Resolution
+    /// Mode on.
+    const USER_REG: &str = "WINE REGISTRY Version 2\n\
+;; All keys relative to \\\\User\\\\S-1-5-21-0-0-0-1000\n\
+\n\
+#arch=win64\n\
+\n\
+[Control Panel\\\\Desktop] 1759800000\n\
+#time=1dc37f8a1b2c3d4\n\
+\"ActiveWndTrackTimeout\"=dword:00000000\n\
+\"LogPixels\"=dword:000000c0\n\
+\"Wallpaper\"=\"\"\n\
+\n\
+[Software\\\\Wine\\\\Fonts] 1759800000\n\
+\"LogPixels\"=dword:00000060\n\
+\n\
+[Software\\\\Wine\\\\Mac Driver] 1759800000\n\
+#time=1dc37f8a1b2c3d4\n\
+\"RetinaMode\"=\"y\"\n\
+\"Odd \\\"name\\\"\"=str(2):\"%USERPROFILE%\\\\x\"\n\
+\"Binary\"=hex:01,02,\\\n\
+  03,04\n\
+@=\"default\"\n\
+\n\
+[Software\\\\Valve\\\\Steam\\\\ActiveProcess] 1759800000\n\
+\"pid\"=dword:00000274\n";
+
+    #[test]
+    fn reads_values_from_wine_registry_files() {
+        let read = |key: &str, name: &str| file_value(USER_REG, key, name);
+        assert_eq!(
+            read(r"Control Panel\Desktop", "LogPixels"),
+            Some(FileValue::Dword(192))
+        );
+        assert_eq!(
+            read(r"Software\Wine\Fonts", "LogPixels"),
+            Some(FileValue::Dword(96)),
+            "the same name under another key"
+        );
+        assert_eq!(
+            read(r"software\wine\MAC DRIVER", "retinamode"),
+            Some(FileValue::Sz("y".to_owned())),
+            "keys and names ignore case"
+        );
+        assert_eq!(
+            read(r"Software\Wine\Mac Driver", r#"Odd "name""#),
+            Some(FileValue::Sz(r"%USERPROFILE%\x".to_owned()))
+        );
+        assert_eq!(
+            read(r"Software\Wine\Mac Driver", "Binary"),
+            Some(FileValue::Other)
+        );
+        assert_eq!(
+            read(r"Control Panel\Desktop", "Wallpaper"),
+            Some(FileValue::Sz(String::new()))
+        );
+        assert_eq!(
+            read(r"Software\Valve\Steam\ActiveProcess", "pid"),
+            Some(FileValue::Dword(0x274))
+        );
+    }
+
+    #[test]
+    fn missing_keys_and_values_are_none() {
+        for (key, name) in [
+            (r"Control Panel\Desktop", "RetinaMode"),
+            (r"Software\Wine\Mac Driver", "LogPixels"),
+            (r"Software\Wine", "RetinaMode"),
+            (r"Wine\Mac Driver", "RetinaMode"),
+            (r"Software\Wine\Mac Driver", "@"),
+            (r"Software\Wine\Mac Driver", ""),
+        ] {
+            assert_eq!(file_value(USER_REG, key, name), None, "{key} {name}");
+        }
+        assert_eq!(file_value("", r"Control Panel\Desktop", "LogPixels"), None);
+        assert_eq!(
+            file_value(
+                "[Control Panel\\\\Desktop]\n\"LogPixels\"\n\"LogPixels\"=dword:zz\n",
+                r"Control Panel\Desktop",
+                "LogPixels"
+            ),
+            Some(FileValue::Other),
+            "a line without '=' is skipped; bad data is Other"
+        );
+    }
+
+    #[test]
+    fn resolves_wines_escapes() {
+        let text = "[A\\\\B] 1\n\"Name\"=\"caf\\xe9 \\x4e2d\\x6587 tab\\tend\\\\\"\n";
+        assert_eq!(
+            file_value(text, r"A\B", "name"),
+            Some(FileValue::Sz("café 中文 tab\tend\\".to_owned()))
+        );
+        assert_eq!(
+            file_value("[K] 1\n\"Name\"=\"unterminated\n", "K", "Name"),
+            Some(FileValue::Other)
         );
     }
 
