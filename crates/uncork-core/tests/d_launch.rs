@@ -596,7 +596,8 @@ fn reasons_say_where_a_fixed_backend_came_from() {
 
 #[test]
 fn auto_scans_the_executable_and_its_dlls() {
-    let fx = Fixture::new(CX_FEATURES);
+    // A runtime that can also load D3DMetal per process.
+    let fx = Fixture::new(&[CX_FEATURES, &["dllpath-prepend"]].concat());
     fx.dxmt("0.80");
     fx.d3dmetal("3.0");
     let components = fx.components();
@@ -643,6 +644,103 @@ fn auto_scans_the_executable_and_its_dlls() {
         assert_eq!(backend, expected, "{}: {reason}", path.display());
         assert!(reason.starts_with(reason_start), "{reason}");
     }
+}
+
+#[test]
+fn d3dmetal_the_runtime_cannot_load_is_passed_over() {
+    // The catalog's CrossOver-derived runtime has the `d3dmetal` feature
+    // but no per-process DLL path, so D3DMetal can never be activated.
+    let fx = Fixture::new(CX_FEATURES);
+    fx.d3dmetal("3.0");
+    fx.dxvk("1.10.3");
+    let components = fx.components();
+    let bottle = fx.bottle("steam", |_| {});
+    let exe = game(
+        fx.dir.path(),
+        "d3d11x64",
+        &PeBuilder::pe64().import("d3d11.dll"),
+    );
+    let plan = launch::plan(
+        ctx(&fx, &bottle, &components, None),
+        &target(&exe),
+        &LaunchOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        plan.activation.backend,
+        Backend::Dxvk,
+        "{}",
+        plan.backend_reason
+    );
+
+    let aoe2 = profile(
+        "schema = 1\nid = \"aoe2\"\nname = \"AoE2\"\n[exe]\npath = \"d3d11x64.exe\"\n[graphics]\nbackend = \"dxmt\"\nfallbacks = [\"d3dmetal\", \"dxvk\", \"wined3d\"]\n",
+    );
+    let plan = launch::plan(
+        ctx(&fx, &bottle, &components, Some(&aoe2)),
+        &target(&exe),
+        &LaunchOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(plan.activation.backend, Backend::Dxvk);
+
+    let d3d12 = game(
+        fx.dir.path(),
+        "d3d12",
+        &PeBuilder::pe64().import("d3d12.dll"),
+    );
+    let plan = launch::plan(
+        ctx(&fx, &bottle, &components, None),
+        &target(&d3d12),
+        &LaunchOptions::default(),
+    )
+    .unwrap();
+    let warning = plan
+        .warnings
+        .iter()
+        .find(|warning| warning.contains("only D3DMetal runs Direct3D 12"))
+        .unwrap_or_else(|| panic!("{:#?}", plan.warnings));
+    assert!(
+        warning.contains("can load it per process"),
+        "the real reason: {warning}"
+    );
+
+    let message = unsupported(
+        launch::plan(
+            ctx(&fx, &bottle, &components, None),
+            &target(&exe),
+            &fixed(Backend::D3dmetal),
+        )
+        .unwrap_err(),
+    );
+    assert!(
+        message.starts_with(
+            "--backend d3dmetal: D3DMetal needs a Wine runtime that can load it per process"
+        ),
+        "{message}"
+    );
+}
+
+#[test]
+fn dxmt_copied_into_the_prefix_needs_the_runtimes_bridge() {
+    let fx = Fixture::new(CX_FEATURES);
+    fs::remove_file(fx.wine.root.join("lib/wine/x86_64-unix/winemetal.so")).unwrap();
+    fx.dxmt("0.80");
+    let components = fx.components();
+    let bottle = fx.bottle("steam", |_| {});
+    let exe = ron_like(fx.dir.path());
+    let plan = launch::plan(
+        ctx(&fx, &bottle, &components, None),
+        &target(&exe),
+        &LaunchOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        plan.activation.backend,
+        Backend::Wined3d,
+        "{}",
+        plan.backend_reason
+    );
 }
 
 #[test]

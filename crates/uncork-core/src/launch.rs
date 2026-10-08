@@ -87,10 +87,6 @@ const FEATURE_MSYNC: &str = "msync";
 const FEATURE_WOW64: &str = "wow64";
 /// Runtime feature: honors [`LAA_VAR`].
 const FEATURE_LARGE_ADDRESS_AWARE: &str = "large-address-aware";
-/// Runtime feature: winemac exports the Metal view API DXMT needs.
-const FEATURE_DXMT: &str = "dxmt";
-/// Runtime feature: CrossOver-derived glue D3DMetal needs.
-const FEATURE_D3DMETAL: &str = "d3dmetal";
 
 /// The variable CrossOver-derived Wine reads to make a 32-bit program
 /// large-address-aware.
@@ -900,7 +896,10 @@ fn incompatibility(backend: Backend, program: &Program) -> Option<String> {
 }
 
 /// Why `backend` cannot be used in this bottle, with the fix; `None` when
-/// it can (WineD3D always can).
+/// it can (WineD3D always can): its component (or the bottle's pinned
+/// version) must be installed and the runtime must be able to activate it
+/// ([`crate::graphics::runtime_blocker`]), so [`crate::graphics::recommend`]
+/// never picks a backend that [`crate::graphics::activation`] would reject.
 fn unavailable_reason(ctx: PlanContext<'_>, backend: Backend) -> Option<String> {
     let kind = backend.component_kind()?;
     let name = display_name(backend);
@@ -924,13 +923,7 @@ fn unavailable_reason(ctx: PlanContext<'_>, backend: Backend) -> Option<String> 
             None => format!("{name} is not installed; {install}"),
         });
     }
-    let feature = required_feature(backend)?;
-    (!ctx.wine.has_feature(feature)).then(|| {
-        format!(
-            "Wine {} cannot load {name} (the runtime lacks the `{feature}` feature); use a Wine runtime that has it (`uncork runtime available` lists them)",
-            ctx.wine.version
-        )
-    })
+    crate::graphics::runtime_blocker(backend, ctx.wine)
 }
 
 /// What [`crate::graphics::recommend`] may choose from.
@@ -963,15 +956,6 @@ fn version_pin(bottle: &Bottle, backend: Backend) -> Option<&str> {
         Backend::Dxvk => graphics.dxvk.as_deref(),
         Backend::D3dmetal => graphics.d3dmetal.as_deref(),
         Backend::Wined3d => None,
-    }
-}
-
-/// The runtime feature `backend` needs besides its component.
-fn required_feature(backend: Backend) -> Option<&'static str> {
-    match backend {
-        Backend::Dxmt => Some(FEATURE_DXMT),
-        Backend::D3dmetal => Some(FEATURE_D3DMETAL),
-        Backend::Dxvk | Backend::Wined3d => None,
     }
 }
 

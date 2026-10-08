@@ -190,11 +190,14 @@ pub fn supports(backend: Backend, api: GraphicsApi, bitness: Bitness) -> bool {
 /// What is installed, for [`recommend`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Availability {
-    /// A `dxmt` component is installed and the Wine runtime has the `dxmt` feature.
+    /// A `dxmt` component is installed and the Wine runtime can load it
+    /// ([`runtime_blocker`]: the `dxmt` feature, and `winemetal.so` when
+    /// the DLLs are copied into the prefix).
     pub dxmt: bool,
     /// A `dxvk` component is installed.
     pub dxvk: bool,
-    /// A `d3dmetal` component is installed and the Wine runtime has the `d3dmetal` feature.
+    /// A `d3dmetal` component is installed and the Wine runtime can load it
+    /// ([`runtime_blocker`]: the `d3dmetal` feature and per-process loading).
     pub d3dmetal: bool,
 }
 
@@ -501,6 +504,56 @@ pub fn strategy_for(backend: Backend, wine: &WineRuntime) -> crate::Result<Strat
     } else {
         Ok(Strategy::PrefixNative)
     }
+}
+
+/// The runtime feature `backend` needs besides its component: `dxmt`
+/// (winemac exports the Metal view API DXMT needs) for DXMT, `d3dmetal`
+/// (CrossOver-derived glue) for D3DMetal, none for DXVK and WineD3D.
+#[must_use]
+pub fn required_feature(backend: Backend) -> Option<&'static str> {
+    match backend {
+        Backend::Dxmt => Some("dxmt"),
+        Backend::D3dmetal => Some("d3dmetal"),
+        Backend::Dxvk | Backend::Wined3d => None,
+    }
+}
+
+/// Why `wine` cannot run `backend` even with the backend's component
+/// installed, with the fix; `None` when it can. Everything [`activation`]
+/// checks about the runtime:
+///
+/// - [`runtime_feature_blocker`]: the [`required_feature`], and a way to
+///   load the backend ([`strategy_for`]; D3DMetal needs per-process
+///   loading);
+/// - DXMT copied into the prefix ([`Strategy::PrefixNative`]) needs the
+///   runtime's own `lib/wine/x86_64-unix/winemetal.so`.
+#[must_use]
+pub fn runtime_blocker(backend: Backend, wine: &WineRuntime) -> Option<String> {
+    runtime_feature_blocker(backend, wine).or_else(|| {
+        let native = matches!(strategy_for(backend, wine), Ok(Strategy::PrefixNative));
+        (backend == Backend::Dxmt && native)
+            .then(|| require_winemetal_bridge(wine).err())
+            .flatten()
+            .map(|err| err.to_string())
+    })
+}
+
+/// The part of [`runtime_blocker`] that only needs the runtime's declared
+/// features (for judging a runtime that is not installed yet).
+#[must_use]
+pub fn runtime_feature_blocker(backend: Backend, wine: &WineRuntime) -> Option<String> {
+    let name = backend.display_name();
+    if let Some(feature) = required_feature(backend)
+        && !wine.has_feature(feature)
+    {
+        return Some(format!(
+            "Wine {} cannot load {name} (the runtime lacks the `{feature}` feature); use a Wine runtime that has it (`uncork runtime available` lists them)",
+            wine.version
+        ));
+    }
+    strategy_for(backend, wine).err().map(|err| {
+        format!("{err}; use a Wine runtime that has one (`uncork runtime available` lists them)")
+    })
 }
 
 /// Runtime feature: honors `WINEDLLPATH_DXMT`/`_DXVK`/`_D3DMETAL`.

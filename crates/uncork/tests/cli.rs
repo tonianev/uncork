@@ -381,6 +381,41 @@ fn inspect_reports_bitness_api_and_backend() {
 }
 
 #[test]
+fn inspect_judges_d3dmetal_by_what_the_installed_wine_can_load() {
+    let home = Home::new();
+    // The catalog's CrossOver-derived Wine: `d3dmetal`, but no per-process
+    // DLL path, so D3DMetal cannot be activated.
+    home.install_fake_wine();
+    let wine_meta = home.root().join("components/wine/fake-1/component.toml");
+    let meta = std::fs::read_to_string(&wine_meta).unwrap();
+    std::fs::write(
+        &wine_meta,
+        meta.replace("\"dxmt\"", "\"dxmt\", \"d3dmetal\""),
+    )
+    .unwrap();
+    home.install_component("d3dmetal", "3.0", &[], &[]);
+    home.install_component("dxvk", "1.10.3", &[], &[]);
+    let dir = home.path().join("d3d12");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("game.exe");
+    PeBuilder::pe64().import("d3d12.dll").write(&exe);
+
+    let scan = home.json(&["inspect", exe.to_str().unwrap()]);
+    assert_eq!(scan["availability"]["d3dmetal"], false);
+    assert_eq!(scan["recommendation"]["backend"], "wined3d");
+    let reason = scan["unavailable"]["d3dmetal"].as_str().unwrap();
+    assert!(reason.contains("can load it per process"), "{reason}");
+
+    let text = home.stdout(&["inspect", exe.to_str().unwrap()]);
+    assert!(
+        text.contains(
+            "Unavailable     d3dmetal: D3DMetal needs a Wine runtime that can load it per process"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
 fn inspect_explains_unreadable_files() {
     let home = Home::new();
     let not_pe = home.path().join("readme.exe");

@@ -1,7 +1,7 @@
 //! `uncork inspect <exe>`: what a Windows program is and which backend
 //! Uncork would pick for it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -9,31 +9,57 @@ use anyhow::Context as _;
 use serde::Serialize;
 use uncork_core::catalog::Catalog;
 use uncork_core::component::{ComponentKind, InstalledComponent};
-use uncork_core::graphics::{self, Availability, Recommendation};
+use uncork_core::graphics::{self, Availability, Backend, Recommendation};
+use uncork_core::wine::WineRuntime;
 use uncork_pe::{ApiEvidence, Bitness, EvidenceKind, GameScan, GraphicsApi, Machine};
 
 use super::{Ctx, key_values, newest, yes_no};
 use crate::cli::InspectArgs;
 use crate::output;
 
-/// Which backends could be used now: installed components, judged against
-/// the newest installed Wine's features (or, with no Wine installed yet,
-/// the features of the Wine the catalog recommends).
-fn availability(components: &[InstalledComponent]) -> Availability {
-    let features: Vec<String> = match newest(components, ComponentKind::Wine) {
-        Some(wine) => wine.meta.features.clone(),
-        None => Catalog::builtin()
-            .default_for(ComponentKind::Wine)
-            .map(|entry| entry.features.clone())
-            .unwrap_or_default(),
+/// Which backends could be used now, and why the others cannot: an
+/// installed component, judged against the newest installed Wine with the
+/// same checks a launch makes ([`graphics::runtime_blocker`]), or, with no
+/// Wine installed yet, against the features of the Wine the catalog
+/// recommends ([`graphics::runtime_feature_blocker`]).
+fn availability(components: &[InstalledComponent]) -> (Availability, BTreeMap<Backend, String>) {
+    let installed_wine = newest(components, ComponentKind::Wine)
+        .and_then(|component| WineRuntime::from_component(component).ok());
+    let catalog_wine = || {
+        let catalog = Catalog::builtin();
+        let entry = catalog.default_for(ComponentKind::Wine);
+        WineRuntime {
+            root: std::path::PathBuf::new(),
+            version: entry.map_or_else(String::new, |entry| entry.version.clone()),
+            features: entry.map_or_else(Vec::new, |entry| entry.features.clone()),
+        }
     };
-    let wine_has = |feature: &str| features.iter().any(|f| f == feature);
-    let installed = |kind: ComponentKind| newest(components, kind).is_some();
-    Availability {
-        dxmt: installed(ComponentKind::Dxmt) && wine_has("dxmt"),
-        dxvk: installed(ComponentKind::Dxvk),
-        d3dmetal: installed(ComponentKind::D3dmetal) && wine_has("d3dmetal"),
+    let mut reasons = BTreeMap::new();
+    for backend in [Backend::Dxmt, Backend::Dxvk, Backend::D3dmetal] {
+        let Some(kind) = backend.component_kind() else {
+            continue;
+        };
+        let reason = if newest(components, kind).is_none() {
+            Some(match backend {
+                Backend::D3dmetal => "not imported; import it from Apple's Game Porting Toolkit with `uncork runtime import-gptk <path>`".to_owned(),
+                _ => format!("not installed; install it with `uncork runtime install {kind}`"),
+            })
+        } else {
+            match &installed_wine {
+                Some(wine) => graphics::runtime_blocker(backend, wine),
+                None => graphics::runtime_feature_blocker(backend, &catalog_wine()),
+            }
+        };
+        if let Some(reason) = reason {
+            reasons.insert(backend, reason);
+        }
     }
+    let available = Availability {
+        dxmt: !reasons.contains_key(&Backend::Dxmt),
+        dxvk: !reasons.contains_key(&Backend::Dxvk),
+        d3dmetal: !reasons.contains_key(&Backend::D3dmetal),
+    };
+    (available, reasons)
 }
 
 /// `availability` in `--json` output.
@@ -69,6 +95,8 @@ struct InspectView<'a> {
     non_nx_modules: &'a [String],
     skipped: Vec<SkippedView<'a>>,
     availability: AvailabilityView,
+    /// Why each backend that is not available cannot be used.
+    unavailable: &'a BTreeMap<Backend, String>,
     recommendation: &'a Recommendation,
 }
 
@@ -77,7 +105,7 @@ pub(super) fn run(ctx: &Ctx, args: &InspectArgs) -> anyhow::Result<ExitCode> {
     let scan = uncork_pe::scan_game(&args.exe)
         .with_context(|| format!("cannot inspect {}", args.exe.display()))?;
     let components = ctx.components()?;
-    let available = availability(&components);
+    let (available, unavailable) = availability(&components);
     let recommendation = graphics::recommend(
         scan.primary_api(),
         scan.bitness(),
@@ -111,10 +139,11 @@ pub(super) fn run(ctx: &Ctx, args: &InspectArgs) -> anyhow::Result<ExitCode> {
                 dxvk: available.dxvk,
                 d3dmetal: available.d3dmetal,
             },
+            unavailable: &unavailable,
             recommendation: &recommendation,
         })?;
     } else {
-        print!("{}", render(&scan, &recommendation));
+        print!("{}", render(&scan, &recommendation, &unavailable));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -132,7 +161,11 @@ fn api_label(api: GraphicsApi) -> &'static str {
     }
 }
 
-fn render(scan: &GameScan, recommendation: &Recommendation) -> String {
+fn render(
+    scan: &GameScan,
+    recommendation: &Recommendation,
+    unavailable: &BTreeMap<Backend, String>,
+) -> String {
     let bitness = scan.bitness();
     let architecture = match bitness {
         Bitness::X86 => "32-bit (PE32, x86)",
@@ -214,5 +247,18 @@ fn render(scan: &GameScan, recommendation: &Recommendation) -> String {
         "Backend",
         format!("{}\n{}", recommendation.backend, recommendation.reason),
     ));
+    // Why the backends the recommendation would rather have used cannot be.
+    let passed_over: Vec<String> = recommendation
+        .order
+        .iter()
+        .filter_map(|backend| {
+            unavailable
+                .get(backend)
+                .map(|reason| format!("{backend}: {reason}"))
+        })
+        .collect();
+    if !passed_over.is_empty() {
+        rows.push(("Unavailable", passed_over.join("\n")));
+    }
     key_values(&rows)
 }
