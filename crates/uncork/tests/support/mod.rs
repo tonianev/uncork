@@ -190,6 +190,29 @@ exit 0
         write_script(&dir.join("bin/wineserver"), &wineserver);
     }
 
+    /// Replace the fake Wine's `bin/wine` and `bin/wineserver` with ones
+    /// that act out a running Steam client: `reg query` reports pid 0x274
+    /// and `wineserver -k0` finds a wineserver. Every call is recorded.
+    pub fn fake_running_steam(&self) {
+        let dir = self.root().join("components/wine").join(FAKE_WINE);
+        let calls = self.calls_file();
+        let calls = calls.to_str().unwrap();
+        let wine = format!(
+            r#"#!/bin/sh
+printf 'wine %s | WINEPREFIX=%s USER=%s\n' "$*" "$WINEPREFIX" "$USER" >> '{calls}'
+case "$1 $2" in
+    "reg query") printf '    pid    REG_DWORD    0x274\r\n'; exit 0 ;;
+esac
+exit 0
+"#
+        );
+        let wineserver = format!(
+            "#!/bin/sh\nprintf 'wineserver %s | WINEPREFIX=%s\\n' \"$*\" \"$WINEPREFIX\" >> '{calls}'\nexit 0\n"
+        );
+        write_script(&dir.join("bin/wine"), &wine);
+        write_script(&dir.join("bin/wineserver"), &wineserver);
+    }
+
     fn calls_file(&self) -> PathBuf {
         self.path().join("calls.log")
     }

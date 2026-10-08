@@ -99,6 +99,16 @@ pub enum LaunchMode {
 /// How often [`ensure_running`] and [`stop`] ask whether the client runs.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long [`play`] in [`LaunchMode::Applaunch`] mode gives a running
+/// client to exit after `-shutdown` before it stops the bottle with
+/// `wineserver --kill` (measured: `-shutdown` alone can take over a minute).
+pub const APPLAUNCH_SHUTDOWN_GRACE: Duration = Duration::from_secs(15);
+
+/// The variables Steam sets for the games it starts, set to the app id in
+/// [`LaunchMode::Direct`] mode so Steamworks knows the game (and does not
+/// ask Steam to start it again) without a `steam_appid.txt`.
+const STEAM_APP_VARS: [&str; 2] = ["SteamAppId", "SteamGameId"];
+
 /// The installer's file name in `cache/downloads/`.
 const INSTALLER_FILE: &str = "SteamSetup.exe";
 
@@ -780,7 +790,7 @@ fn start_if_needed(
         return Ok(false);
     }
     let steam = find_steam(bottle)?;
-    prepare_client_dxvk(layout, bottle, &steam)?;
+    prepare_client_dxvk_logged(layout, bottle, &steam)?;
     let (args, _) = client::silent_client_args(&[]);
     let spec = client_spec(bottle, wine, &steam, args);
     tracing::info!("starting Steam in bottle {}", bottle.config.name);
@@ -789,23 +799,49 @@ fn start_if_needed(
     Ok(true)
 }
 
-/// [`ensure_client_dxvk`] with the bottle's DXVK, warning when there is none.
-fn prepare_client_dxvk(
+/// [`ensure_client_dxvk`] with the bottle's DXVK: its `graphics.dxvk` pin,
+/// else the newest installed. Every way of starting the client uses this, so
+/// they all give it the same DLLs. Returns a warning to show when that DXVK
+/// is not installed (the client still starts, but its windows stay black),
+/// `None` when the DLLs are in place.
+///
+/// # Errors
+/// As [`ensure_client_dxvk`], and component lookup errors other than "not
+/// installed".
+pub fn prepare_client_dxvk(
     layout: &Layout,
     bottle: &Bottle,
     steam: &SteamInstall,
-) -> crate::Result<()> {
+) -> crate::Result<Option<String>> {
     let pin = bottle.config.graphics.dxvk.as_deref();
     let dxvk = match crate::component::find_installed(layout, ComponentKind::Dxvk, pin) {
         Ok(component) => Some(component),
         Err(Error::NotFound { .. }) => None,
         Err(err) => return Err(err),
     };
-    if !ensure_client_dxvk(steam, dxvk.as_ref())? {
-        tracing::warn!(
-            "DXVK{} is not installed, so Steam's windows will stay black (its web UI needs Direct3D 11); install it with `uncork runtime install dxvk`",
-            pin.map_or_else(String::new, |pin| format!(" {pin}"))
-        );
+    if ensure_client_dxvk(steam, dxvk.as_ref())? {
+        return Ok(None);
+    }
+    let effect = "so Steam's windows will stay black (its web UI needs Direct3D 11)";
+    Ok(Some(match pin {
+        Some(pin) => format!(
+            "DXVK {pin} (pinned by graphics.dxvk in bottle {name}) is not installed, {effect}; install it with `uncork runtime install dxvk --version {pin}` or unpin it with `uncork bottle set {name} graphics.dxvk=`",
+            name = bottle.config.name
+        ),
+        None => format!(
+            "DXVK is not installed, {effect}; install it with `uncork runtime install dxvk`"
+        ),
+    }))
+}
+
+/// [`prepare_client_dxvk`], logging its warning.
+fn prepare_client_dxvk_logged(
+    layout: &Layout,
+    bottle: &Bottle,
+    steam: &SteamInstall,
+) -> crate::Result<()> {
+    if let Some(warning) = prepare_client_dxvk(layout, bottle, steam)? {
+        tracing::warn!("{warning}");
     }
     Ok(())
 }
@@ -884,6 +920,11 @@ fn reap_in_background(mut child: Child) {
 /// start with one of [`uncork_steam::client::NON_GAME_EXE_PREFIXES`]. A
 /// game Steam does not list as fully installed gets a warning.
 ///
+/// In [`LaunchMode::Direct`] mode (the profile's launch mode, and Direct
+/// without a profile) the game's environment also gets `SteamAppId` and
+/// `SteamGameId` = `appid`, as Steam gives the games it starts; a value the
+/// bottle, the profile or `--env` sets wins.
+///
 /// # Errors
 /// [`crate::Error::NotFound`] if the game is not installed (hint: install it
 /// in Steam first), plus planning errors.
@@ -895,6 +936,11 @@ pub fn plan_game(
 ) -> crate::Result<LaunchPlan> {
     let app = find_game(ctx.bottle, appid)?;
     plan_found_game(ctx, &app, args, options)
+}
+
+/// The launch mode of a game with `profile` (Direct without one).
+fn launch_mode(profile: Option<&GameProfile>) -> LaunchMode {
+    profile.map_or(LaunchMode::Direct, GameProfile::launch_mode)
 }
 
 /// [`plan_game`] for an app already found.
@@ -910,6 +956,14 @@ fn plan_found_game(
         args: args.to_vec(),
     };
     let mut plan = crate::launch::plan(ctx, &target, options)?;
+    if launch_mode(ctx.profile) == LaunchMode::Direct {
+        for var in STEAM_APP_VARS {
+            plan.command
+                .env
+                .entry(var.to_owned())
+                .or_insert_with(|| app.manifest.appid.to_string());
+        }
+    }
     if !app.manifest.is_fully_installed() {
         plan.warnings.insert(
             0,
@@ -1043,10 +1097,16 @@ pub fn logs_dir(bottle: &Bottle) -> std::path::PathBuf {
 pub struct PlayOutcome {
     /// The game's launch plan.
     pub plan: LaunchPlan,
+    /// How the game was (or, for a dry run, would be) started.
+    pub mode: LaunchMode,
     /// The started game process; `None` for a dry run. In
     /// [`LaunchMode::Applaunch`] mode this is the Steam client Uncork
     /// started, which starts the game.
     pub child: Option<std::process::Child>,
+    /// Where `child`'s output goes: the plan's log, except in
+    /// [`LaunchMode::Applaunch`] mode, where it is the Steam client's log
+    /// (`logs/<bottle>-steam-<unix secs>.log`).
+    pub log: PathBuf,
     /// INI files the profile changed before launch.
     pub ini_changed: Vec<std::path::PathBuf>,
     /// `true` if Steam had to be started first.
@@ -1067,11 +1127,13 @@ pub struct PlayOutcome {
 ///
 /// The launch mode is the profile's ([`GameProfile::launch_mode`]), and
 /// [`LaunchMode::Direct`] without a profile. `%INSTALLDIR%` in INI paths is
-/// the app's install directory. In `Applaunch` mode `steam_timeout` bounds
-/// both stopping the old client and starting the new one, the plan's
-/// backend files are put in place first, the game arguments are the
-/// profile's `launch.args` then `args`, and the client's environment is the
-/// game's (see the module docs for the trade-off).
+/// the app's install directory. In `Applaunch` mode a running client gets
+/// [`APPLAUNCH_SHUTDOWN_GRACE`] (at most `steam_timeout`) to exit before the
+/// bottle is stopped with `wineserver --kill`, `steam_timeout` bounds
+/// starting the new one, the plan's backend files are put in place first,
+/// the game arguments are the profile's `launch.args` then `args`, and the
+/// client's environment is the game's (see the module docs for the
+/// trade-off).
 ///
 /// # Errors
 /// Lookup, planning, Steam start or spawn errors.
@@ -1095,6 +1157,7 @@ pub fn play(
         args,
         options,
         steam_timeout,
+        shutdown_grace: APPLAUNCH_SHUTDOWN_GRACE,
         poll: POLL_INTERVAL,
     };
     play_with(layout, bottle, wine, &request, dry_run)
@@ -1108,6 +1171,8 @@ struct PlayRequest<'a> {
     args: &'a [String],
     options: &'a LaunchOptions,
     steam_timeout: Duration,
+    /// [`APPLAUNCH_SHUTDOWN_GRACE`].
+    shutdown_grace: Duration,
     poll: Duration,
 }
 
@@ -1128,9 +1193,12 @@ fn play_with(
         profile: request.profile,
     };
     let plan = plan_found_game(ctx, &app, request.args, request.options)?;
+    let mode = launch_mode(request.profile);
     if dry_run {
         return Ok(PlayOutcome {
+            log: plan.log.clone(),
             plan,
+            mode,
             child: None,
             ini_changed: Vec::new(),
             started_steam: false,
@@ -1142,44 +1210,52 @@ fn play_with(
         }
         None => Vec::new(),
     };
-    let mode = request
-        .profile
-        .map_or(LaunchMode::Direct, GameProfile::launch_mode);
-    let (child, started_steam) = match mode {
+    let (child, log, started_steam) = match mode {
         LaunchMode::Direct => {
             let started =
                 start_if_needed(layout, bottle, wine, request.steam_timeout, request.poll)?;
-            (crate::launch::execute(&plan, bottle, wine)?, started)
+            let child = crate::launch::execute(&plan, bottle, wine)?;
+            (child, plan.log.clone(), started)
         }
-        LaunchMode::Applaunch => (applaunch(layout, bottle, wine, &plan, request)?, true),
-        LaunchMode::Standalone => (crate::launch::execute(&plan, bottle, wine)?, false),
+        LaunchMode::Applaunch => {
+            let (child, log) = applaunch(layout, bottle, wine, &plan, request)?;
+            (child, log, true)
+        }
+        LaunchMode::Standalone => {
+            let child = crate::launch::execute(&plan, bottle, wine)?;
+            (child, plan.log.clone(), false)
+        }
     };
     Ok(PlayOutcome {
         plan,
+        mode,
         child: Some(child),
+        log,
         ini_changed,
         started_steam,
     })
 }
 
-/// The `Applaunch` branch of [`play`]; returns the client it started.
+/// The `Applaunch` branch of [`play`]; returns the client it started and
+/// its log.
 fn applaunch(
     layout: &Layout,
     bottle: &mut Bottle,
     wine: &WineRuntime,
     plan: &LaunchPlan,
     request: &PlayRequest<'_>,
-) -> crate::Result<Child> {
+) -> crate::Result<(Child, PathBuf)> {
     if is_running(bottle, wine)? {
         tracing::info!(
             "restarting Steam in bottle {} with the game's environment",
             bottle.config.name
         );
-        stop_with(bottle, wine, request.steam_timeout, request.poll)?;
+        let grace = request.shutdown_grace.min(request.steam_timeout);
+        stop_with(bottle, wine, grace, request.poll)?;
     }
     crate::launch::prepare(plan, bottle)?;
     let steam = find_steam(bottle)?;
-    prepare_client_dxvk(layout, bottle, &steam)?;
+    prepare_client_dxvk_logged(layout, bottle, &steam)?;
     let mut game_args: Vec<String> = request
         .profile
         .map(|profile| profile.launch.args.clone())
@@ -1191,7 +1267,8 @@ fn applaunch(
         reap_in_background(child);
         return Err(err);
     }
-    Ok(child)
+    let log = spec.log.unwrap_or_else(|| plan.log.clone());
+    Ok((child, log))
 }
 
 /// `steam.exe -silent -nofriendsui -applaunch <appid> <game args>` with the
@@ -1388,6 +1465,7 @@ mod tests {
             args,
             options,
             steam_timeout: Duration::from_secs(5),
+            shutdown_grace: Duration::from_secs(5),
             poll: Duration::from_millis(10),
         }
     }
@@ -1411,11 +1489,63 @@ mod tests {
         let request = quick(&components, None, &[], &options);
         let mut outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
         assert!(outcome.started_steam);
+        assert_eq!(outcome.mode, LaunchMode::Direct);
+        assert_eq!(outcome.log, outcome.plan.log, "the game's own log");
         assert!(outcome.child.take().unwrap().wait().unwrap().success());
         let start = fx.position("steam.exe -silent -nofriendsui |");
         let game = fx.position(&format!("{} |", dir.join("riseofnations.exe").display()));
         assert!(start < game);
         assert!(fx.bottle.syswow64().join("d3d11.dll").is_file());
+        let env = &outcome.plan.command.env;
+        assert_eq!(env.get("SteamAppId").map(String::as_str), Some("287450"));
+        assert_eq!(env.get("SteamGameId").map(String::as_str), Some("287450"));
+    }
+
+    #[test]
+    fn a_profile_or_env_value_wins_over_the_steam_app_id() {
+        let mut fx = Fixture::new();
+        fx.add_game();
+        let components = fx.dxmt();
+        let options = LaunchOptions {
+            env: BTreeMap::from([("SteamGameId".to_owned(), "1".to_owned())]),
+            ..LaunchOptions::default()
+        };
+        let request = quick(&components, None, &[], &options);
+        let outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, true).unwrap();
+        let env = &outcome.plan.command.env;
+        assert_eq!(env.get("SteamAppId").map(String::as_str), Some("287450"));
+        assert_eq!(env.get("SteamGameId").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn applaunch_does_not_wait_long_for_a_client_that_ignores_shutdown() {
+        let mut fx = Fixture::new();
+        fx.add_game();
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fx.flag("server");
+        let profile = applaunch_profile("wined3d");
+        let options = LaunchOptions::default();
+        let mut request = quick(&[], Some(&profile), &[], &options);
+        request.steam_timeout = Duration::from_secs(60);
+        request.shutdown_grace = Duration::from_millis(50);
+
+        let started = std::time::Instant::now();
+        let outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(outcome.child.unwrap().wait().unwrap().success());
+        let shutdown = fx.position("steam.exe -shutdown |");
+        let kill = fx.position("wineserver --kill");
+        let forget = fx.position(r"wine reg add HKCU\Software\Valve\Steam\ActiveProcess /v pid");
+        let applaunch = fx.position("-applaunch 287450 -nointro |");
+        assert!(
+            shutdown < kill && kill < forget && forget < applaunch,
+            "{:#?}",
+            fx.calls()
+        );
     }
 
     #[test]
@@ -1433,7 +1563,14 @@ mod tests {
 
         let outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
         assert!(outcome.started_steam);
+        assert_eq!(outcome.mode, LaunchMode::Applaunch);
         assert_eq!(outcome.plan.activation.backend, Backend::Dxmt);
+        let log = outcome.log.file_name().unwrap().to_str().unwrap();
+        assert!(log.starts_with("steam-steam-"), "the client's log: {log}");
+        assert!(
+            !outcome.plan.command.env.contains_key("SteamAppId"),
+            "Steam sets it for the game it starts"
+        );
         assert!(outcome.child.unwrap().wait().unwrap().success());
 
         let shutdown = fx.position("steam.exe -shutdown |");

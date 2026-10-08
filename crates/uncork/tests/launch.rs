@@ -179,6 +179,30 @@ fn play_dry_run_shows_backend_ini_and_command() {
 }
 
 #[test]
+fn play_wait_returns_when_the_game_exits_while_steam_keeps_running() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_bottle("b", FAKE_WINE);
+    let steam = home.install_fake_steam("b", &[(70, "Half-Life", 4)]);
+    PeBuilder::pe32().write(&steam.join("steamapps/common/Half-Life/hl.exe"));
+    home.fake_running_steam();
+    let text = home.stdout(&["play", "70", "-b", "b", "--wait", "--backend", "wined3d"]);
+    assert!(text.contains("Started hl.exe on wined3d (pid "), "{text}");
+    assert!(text.contains("hl.exe exited"), "{text}");
+    let calls = home.calls();
+    assert!(
+        calls.iter().any(|call| call.contains("hl.exe")),
+        "{calls:#?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("wineserver --wait")),
+        "Steam keeps the wineserver running; waiting for it would never end: {calls:#?}"
+    );
+}
+
+#[test]
 fn play_reports_games_that_are_not_installed() {
     let home = home_with_bottle();
     home.install_fake_steam("test1", &[]);
@@ -215,6 +239,33 @@ fn steam_start_starts_a_client_that_crashed() {
     let text = home.stdout(&["steam", "start", "-b", "b"]);
     assert!(text.contains("Started Steam in bottle b (pid "), "{text}");
     assert!(!text.contains("already running"), "{text}");
+}
+
+#[test]
+fn steam_start_gives_the_client_the_bottles_pinned_dxvk() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_bottle("b", FAKE_WINE);
+    let steam = home.install_fake_steam("b", &[]);
+    for version in ["1.10.3-20230507", "2.0"] {
+        let dir = home.install_component("dxvk", version, &[], &[]);
+        for dll in ["d3d11.dll", "d3d10core.dll"] {
+            let path = dir.join("x86_64-windows").join(dll);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, format!("dxvk {version} {dll}")).unwrap();
+        }
+    }
+    home.uncork()
+        .args(["bottle", "set", "b", "graphics.dxvk=1.10.3-20230507"])
+        .assert()
+        .success();
+    let text = home.stdout(&["steam", "start", "-b", "b"]);
+    assert!(text.contains("Started Steam in bottle b (pid "), "{text}");
+    assert_eq!(
+        fs::read_to_string(steam.join("bin/cef/cef.win64/d3d11.dll")).unwrap(),
+        "dxvk 1.10.3-20230507 d3d11.dll",
+        "the pinned DXVK, not the newest"
+    );
 }
 
 #[test]

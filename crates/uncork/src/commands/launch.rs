@@ -11,6 +11,7 @@ use uncork_core::bottle::Bottle;
 use uncork_core::graphics::{Backend, BackendChoice, Strategy};
 use uncork_core::launch::{self, LaunchOptions, LaunchPlan, PlanContext, Target};
 use uncork_core::profile::GameProfile;
+use uncork_core::steam::{LaunchMode, PlayOutcome};
 use uncork_core::wine::WineRuntime;
 
 use super::{Ctx, bottle_wine, is_env_name};
@@ -135,13 +136,89 @@ pub(super) fn play_steam_game(
         print_dry_run(ctx, &outcome.plan, &ini)?;
         return Ok(ExitCode::SUCCESS);
     }
-    if outcome.started_steam {
+    if outcome.started_steam && outcome.mode != LaunchMode::Applaunch {
         println!("Started Steam in bottle {}.", bottle.config.name);
     }
     for file in &outcome.ini_changed {
         println!("Updated {}", file.display());
     }
-    report_launch(&outcome.plan, outcome.child, &bottle, &wine, flags.wait)
+    report_play(outcome, appid, &bottle, &wine, flags.wait)
+}
+
+/// [`report_launch`] for `play`: in Applaunch mode the process Uncork
+/// started is the Steam client, so its pid and log are labelled as Steam's.
+/// `--wait` waits for that process only while Steam runs in the bottle
+/// (always in Direct and Applaunch mode): Steam keeps the bottle's
+/// wineserver alive, so waiting for it would last until the user quits
+/// Steam.
+fn report_play(
+    outcome: PlayOutcome,
+    appid: u32,
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    wait: bool,
+) -> anyhow::Result<ExitCode> {
+    let program = plan_program(&outcome.plan);
+    let backend = outcome.plan.activation.backend;
+    let Some(mut child) = outcome.child else {
+        println!("Started {program} on {backend}.");
+        return Ok(ExitCode::SUCCESS);
+    };
+    let waited_for = if outcome.mode == LaunchMode::Applaunch {
+        println!(
+            "Started Steam in bottle {} with -applaunch {appid} (pid {}); Steam starts {program} on {backend}.",
+            bottle.config.name,
+            child.id()
+        );
+        println!("Steam log: {}", outcome.log.display());
+        "Steam".to_owned()
+    } else {
+        println!("Started {program} on {backend} (pid {}).", child.id());
+        println!("Log: {}", outcome.log.display());
+        program
+    };
+    if !wait {
+        return Ok(ExitCode::SUCCESS);
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("cannot wait for {waited_for}"))?;
+    let steam_runs = match outcome.mode {
+        LaunchMode::Direct | LaunchMode::Applaunch => true,
+        LaunchMode::Standalone => {
+            uncork_core::steam::is_running(bottle, wine).unwrap_or_else(|err| {
+                tracing::info!(
+                    "cannot tell whether Steam runs in bottle {}: {err}",
+                    bottle.config.name
+                );
+                false
+            })
+        }
+    };
+    if !steam_runs {
+        wait_for_wineserver(bottle, wine)?;
+    }
+    println!("{waited_for} exited ({status}).");
+    Ok(exit_code(status))
+}
+
+/// `wineserver --wait` for `bottle`.
+fn wait_for_wineserver(bottle: &Bottle, wine: &WineRuntime) -> anyhow::Result<()> {
+    uncork_core::process::run(&uncork_core::launch::in_bottle(
+        wine.wait_command(bottle.prefix()),
+        bottle,
+        wine,
+    ))
+    .context("cannot wait for the bottle's wineserver")
+}
+
+/// Success when the program succeeded.
+fn exit_code(status: std::process::ExitStatus) -> ExitCode {
+    if status.success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 /// The game's install directory, if Steam and the game are installed.
@@ -357,18 +434,9 @@ fn report_launch(
     let status = child
         .wait()
         .with_context(|| format!("cannot wait for {program}"))?;
-    uncork_core::process::run(&uncork_core::launch::in_bottle(
-        wine.wait_command(bottle.prefix()),
-        bottle,
-        wine,
-    ))
-    .context("cannot wait for the bottle's wineserver")?;
+    wait_for_wineserver(bottle, wine)?;
     println!("{program} exited ({status}).");
-    Ok(if status.success() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
+    Ok(exit_code(status))
 }
 
 /// The program a plan starts, for messages: the first argument after the

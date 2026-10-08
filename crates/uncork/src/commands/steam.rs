@@ -7,7 +7,6 @@ use std::process::{Child, ExitCode};
 use anyhow::{Context as _, anyhow};
 use serde::Serialize;
 use uncork_core::bottle::Bottle;
-use uncork_core::component::{ComponentKind, InstalledComponent};
 use uncork_core::process::CommandSpec;
 use uncork_core::wine::WineRuntime;
 use uncork_steam::SteamInstall;
@@ -15,7 +14,7 @@ use uncork_steam::library::STATE_FULLY_INSTALLED;
 
 use super::launch::{launch_options, play_steam_game};
 use super::setup::STEAM_INSTALLER_BYTES;
-use super::{Ctx, bottle_wine, confirm_download, newest};
+use super::{Ctx, bottle_wine, confirm_download};
 use crate::cli::{LaunchFlags, SteamCommand};
 use crate::output::{self, TerminalProgress, human_bytes};
 
@@ -73,8 +72,7 @@ pub(super) fn install_and_start(
     }
     uncork_core::steam::install(&ctx.layout, bottle, wine, &mut TerminalProgress::default())
         .with_context(|| format!("cannot install Steam into bottle {}", bottle.config.name))?;
-    let components = ctx.components()?;
-    start_client(bottle, wine, &components, &BTreeMap::new(), None)?;
+    start_client(ctx, bottle, wine, &BTreeMap::new(), None)?;
     println!(
         "Sign in to Steam in the window that opened, install your game, then run: uncork play <game>"
     );
@@ -110,11 +108,12 @@ fn steam_missing(bottle: &Bottle) -> anyhow::Error {
 }
 
 /// Start the Steam client with its window visible (not `-silent`), after
-/// putting DXVK next to its web helper. Does nothing when it already runs.
+/// putting the bottle's DXVK (its `graphics.dxvk` pin, else the newest)
+/// next to its web helper. Does nothing when it already runs.
 fn start_client(
+    ctx: &Ctx,
     bottle: &Bottle,
     wine: &WineRuntime,
-    components: &[InstalledComponent],
     env: &BTreeMap<String, String>,
     wine_debug: Option<&str>,
 ) -> anyhow::Result<Option<Child>> {
@@ -126,11 +125,8 @@ fn start_client(
         println!("Steam is already running in bottle {name}.");
         return Ok(None);
     }
-    let dxvk = newest(components, ComponentKind::Dxvk);
-    if !uncork_core::steam::ensure_client_dxvk(&install, dxvk)? {
-        eprintln!(
-            "warning: DXVK is not installed, so Steam's window will stay black; run: uncork runtime install dxvk"
-        );
+    if let Some(warning) = uncork_core::steam::prepare_client_dxvk(&ctx.layout, bottle, &install)? {
+        eprintln!("warning: {warning}");
     }
     let spec = client_spec(bottle, wine, env, wine_debug)?;
     let child = uncork_core::process::spawn(&spec).context("cannot start Steam")?;
@@ -165,11 +161,10 @@ fn start(ctx: &Ctx, flags: &LaunchFlags) -> anyhow::Result<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
-    let components = ctx.components()?;
     let child = start_client(
+        ctx,
         &bottle,
         &wine,
-        &components,
         &options.env,
         options.wine_debug.as_deref(),
     )?;
