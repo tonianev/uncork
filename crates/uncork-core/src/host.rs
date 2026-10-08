@@ -164,7 +164,7 @@ pub const LOW_DISK_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 /// | `wine-installed` | Ok: a wine component (names the newest). Fail: none | `uncork runtime install wine` |
 /// | `wine-32bit` | Warn: newest wine lacks the `wow64` feature ("32-bit games will not start"). Omitted otherwise or without wine | — |
 /// | `dxmt-installed` | Ok / Warn: missing ("D3D10/11 games fall back to OpenGL") | `uncork runtime install dxmt` |
-/// | `dxvk-installed` | Ok / Info: missing (optional fallback) | `uncork runtime install dxvk` |
+/// | `dxvk-installed` | Ok / Warn: missing ("the Steam client's windows will be black without it": its web UI needs Direct3D 11, which Uncork gives it with DXVK) | `uncork runtime install dxvk` |
 /// | `d3dmetal` | Ok: imported (version). Info: not imported ("optional, 64-bit D3D11/D3D12; import your own copy of Apple's Game Porting Toolkit") | `uncork runtime import-gptk <path>` |
 /// | `bottles` | Ok: "N bottles". Info: none | `uncork setup` |
 /// | `bottle-wine` | Warn, once per bottle whose `wine` version is not installed | `uncork runtime install wine` or `uncork bottle set <name> wine=<v>` |
@@ -365,8 +365,8 @@ fn dxvk_installed(dxvk: Option<&InstalledComponent>) -> Check {
         ),
         None => Check::new(
             ID,
-            Status::Info,
-            "DXVK is not installed (optional fallback)",
+            Status::Warn,
+            "DXVK is not installed: the Steam client's windows will be black without it (its web UI needs Direct3D 11)",
         )
         .with_fix("uncork runtime install dxvk"),
     }
@@ -938,8 +938,12 @@ mod tests {
         assert_eq!(check(&mac(), "dxvk-installed").status, Status::Ok);
         let checks = evaluate(&mac(), &[], &[]);
         let missing = only(&checks, "dxvk-installed");
-        assert_eq!(missing.status, Status::Info);
-        assert!(missing.summary.contains("optional fallback"));
+        assert_eq!(missing.status, Status::Warn);
+        assert!(
+            missing
+                .summary
+                .contains("the Steam client's windows will be black without it")
+        );
         assert_eq!(missing.fix.as_deref(), Some("uncork runtime install dxvk"));
     }
 
