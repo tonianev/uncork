@@ -12,7 +12,7 @@ use uncork_core::wine::WineRuntime;
 use uncork_steam::SteamInstall;
 use uncork_steam::library::STATE_FULLY_INSTALLED;
 
-use super::launch::{launch_options, play_steam_game};
+use super::launch::{launch_options, play_steam_game, profile_for_appid};
 use super::setup::STEAM_INSTALLER_BYTES;
 use super::{Ctx, bottle_wine, confirm_download};
 use crate::cli::{LaunchFlags, SteamCommand};
@@ -31,9 +31,7 @@ pub(super) fn run(ctx: &Ctx, command: &SteamCommand) -> anyhow::Result<ExitCode>
         } => {
             let options = launch_options(launch)?;
             let profiles = super::profile::load_profiles(ctx)?;
-            let profile = profiles
-                .iter()
-                .find(|profile| profile.steam.as_ref().is_some_and(|s| s.appid == *appid));
+            let profile = profile_for_appid(&profiles, *appid)?;
             play_steam_game(ctx, profile, *appid, launch, &options, args)
         }
     }

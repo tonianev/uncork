@@ -10,7 +10,7 @@ use serde::Serialize;
 use uncork_core::bottle::Bottle;
 use uncork_core::graphics::{Backend, BackendChoice, Strategy};
 use uncork_core::launch::{self, LaunchOptions, LaunchPlan, PlanContext, Target};
-use uncork_core::profile::GameProfile;
+use uncork_core::profile::{GameProfile, Lookup};
 use uncork_core::steam::{LaunchMode, PlayOutcome};
 use uncork_core::wine::WineRuntime;
 
@@ -67,7 +67,15 @@ fn backend_choice(arg: BackendArg) -> BackendChoice {
 pub(super) fn play(ctx: &Ctx, args: &PlayArgs) -> anyhow::Result<ExitCode> {
     let options = launch_options(&args.launch)?;
     let profiles = super::profile::load_profiles(ctx)?;
-    let profile = uncork_core::profile::resolve(&profiles, &args.game);
+    let profile = match uncork_core::profile::lookup(&profiles, &args.game) {
+        Lookup::Found(profile) => Some(profile),
+        Lookup::Ambiguous(candidates) => bail!(
+            "{:?} matches several game profiles: {}; name one by its id",
+            args.game,
+            profile_ids(&candidates)
+        ),
+        Lookup::NotFound => None,
+    };
     let appid = match profile {
         Some(profile) => profile.steam.as_ref().map(|steam| steam.appid).ok_or_else(|| {
             anyhow!(
@@ -78,12 +86,38 @@ pub(super) fn play(ctx: &Ctx, args: &PlayArgs) -> anyhow::Result<ExitCode> {
         })?,
         None => parse_appid(&args.game).ok_or_else(|| {
             anyhow!(
-                "no game profile matches {:?} (or several do); `uncork profile list` shows the known games, and `uncork play <Steam app id>` plays any installed Steam game (`uncork steam games` lists them)",
+                "no game profile matches {:?}; `uncork profile list` shows the known games, and `uncork play <Steam app id>` plays any installed Steam game (`uncork steam games` lists them)",
                 args.game
             )
         })?,
     };
     play_steam_game(ctx, profile, appid, &args.launch, &options, &args.args)
+}
+
+/// The profile for Steam app `appid` (`uncork steam launch`), by the same
+/// rule as `play <app id>`: several profiles for one app is an error that
+/// names them.
+pub(super) fn profile_for_appid(
+    profiles: &[GameProfile],
+    appid: u32,
+) -> anyhow::Result<Option<&GameProfile>> {
+    match uncork_core::profile::lookup_appid(profiles, appid) {
+        Lookup::Found(profile) => Ok(Some(profile)),
+        Lookup::Ambiguous(candidates) => bail!(
+            "Steam app {appid} has several game profiles: {}; play one with `uncork play <profile id>`",
+            profile_ids(&candidates)
+        ),
+        Lookup::NotFound => Ok(None),
+    }
+}
+
+/// `a, b, c`: the ids of `profiles`.
+pub(super) fn profile_ids(profiles: &[&GameProfile]) -> String {
+    profiles
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A Steam app id typed on the command line (digits only).

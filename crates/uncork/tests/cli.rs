@@ -331,6 +331,30 @@ fn user_profiles_override_and_invalid_ones_warn() {
 }
 
 #[test]
+fn a_steam_app_with_two_profiles_names_both_instead_of_guessing() {
+    let home = Home::new();
+    let profiles = home.root().join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(
+        profiles.join("ron-wined3d.toml"),
+        "schema = 1\nid = \"ron-wined3d\"\nname = \"RoN on WineD3D\"\n[steam]\nappid = 287450\n[exe]\npath = \"riseofnations.exe\"\n[graphics]\nbackend = \"wined3d\"\n",
+    )
+    .unwrap();
+    for args in [
+        &["play", "287450", "--dry-run"][..],
+        &["steam", "launch", "287450", "--dry-run"],
+    ] {
+        let stderr = home.stderr_of_failure(args);
+        assert!(
+            stderr.contains("rise-of-nations-extended-edition, ron-wined3d"),
+            "{args:?}: {stderr}"
+        );
+    }
+    let stderr = home.stderr_of_failure(&["profile", "show", "287450"]);
+    assert!(stderr.contains("matches several game profiles"), "{stderr}");
+}
+
+#[test]
 fn bottle_list_is_empty_on_a_new_home() {
     let home = Home::new();
     assert_eq!(

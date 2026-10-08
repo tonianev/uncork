@@ -2,10 +2,10 @@
 
 use std::process::ExitCode;
 
-use anyhow::anyhow;
+use anyhow::bail;
 use serde::Serialize;
 use uncork_core::graphics::Backend;
-use uncork_core::profile::{CompatStatus, GameProfile};
+use uncork_core::profile::{CompatStatus, GameProfile, Lookup};
 use uncork_core::steam::LaunchMode;
 use uncork_pe::{Bitness, GraphicsApi};
 
@@ -78,11 +78,16 @@ fn list(ctx: &Ctx) -> anyhow::Result<ExitCode> {
 
 fn show(ctx: &Ctx, game: &str) -> anyhow::Result<ExitCode> {
     let profiles = load_profiles(ctx)?;
-    let profile = uncork_core::profile::resolve(&profiles, game).ok_or_else(|| {
-        anyhow!(
-            "no game profile matches {game:?} (or several do); `uncork profile list` shows them all"
-        )
-    })?;
+    let profile = match uncork_core::profile::lookup(&profiles, game) {
+        Lookup::Found(profile) => profile,
+        Lookup::Ambiguous(candidates) => bail!(
+            "{game:?} matches several game profiles: {}; name one by its id",
+            super::launch::profile_ids(&candidates)
+        ),
+        Lookup::NotFound => {
+            bail!("no game profile matches {game:?}; `uncork profile list` shows them all")
+        }
+    };
     if ctx.json {
         output::print_json(profile)?;
     } else {

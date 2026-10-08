@@ -527,14 +527,47 @@ fn load_user_profile(path: &Path) -> crate::Result<GameProfile> {
     }
 }
 
+/// What [`lookup`] and [`lookup_appid`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lookup<'a> {
+    /// Exactly one profile matches.
+    Found(&'a GameProfile),
+    /// Several profiles match equally well (in the order given), so none is
+    /// chosen; a caller names them so the user can pick one by its id.
+    Ambiguous(Vec<&'a GameProfile>),
+    /// No profile matches.
+    NotFound,
+}
+
+impl<'a> Lookup<'a> {
+    /// The profile, when exactly one matched.
+    #[must_use]
+    pub fn found(self) -> Option<&'a GameProfile> {
+        match self {
+            Lookup::Found(profile) => Some(profile),
+            Lookup::Ambiguous(_) | Lookup::NotFound => None,
+        }
+    }
+}
+
 /// Find a profile by, in order: exact id; Steam app id (if `query` is all
 /// digits); case-insensitive exact name; unique case-insensitive substring of
-/// id or name. Ambiguous substrings return `None`.
+/// id or name. Ambiguous matches return `None`; [`lookup`] tells them apart
+/// from no match.
 #[must_use]
 pub fn resolve<'a>(profiles: &'a [GameProfile], query: &str) -> Option<&'a GameProfile> {
+    lookup(profiles, query).found()
+}
+
+/// [`resolve`], saying whether nothing matched or several profiles did. The
+/// first step that matches anything decides: one match is
+/// [`Lookup::Found`], several are [`Lookup::Ambiguous`] (later steps are
+/// not tried).
+#[must_use]
+pub fn lookup<'a>(profiles: &'a [GameProfile], query: &str) -> Lookup<'a> {
     let query = query.trim();
     if query.is_empty() {
-        return None;
+        return Lookup::NotFound;
     }
     let appid = query
         .bytes()
@@ -544,24 +577,43 @@ pub fn resolve<'a>(profiles: &'a [GameProfile], query: &str) -> Option<&'a GameP
     let lower = query.to_lowercase();
 
     let by_id = |p: &GameProfile| p.id == query;
-    let by_appid =
-        |p: &GameProfile| appid.is_some() && p.steam.as_ref().map(|steam| steam.appid) == appid;
+    let by_appid = |p: &GameProfile| appid.is_some() && profile_appid(p) == appid;
     let by_name = |p: &GameProfile| p.name.to_lowercase() == lower;
     let by_substring = |p: &GameProfile| {
         p.id.to_lowercase().contains(&lower) || p.name.to_lowercase().contains(&lower)
     };
     let steps: [&dyn Fn(&GameProfile) -> bool; 4] = [&by_id, &by_appid, &by_name, &by_substring];
-
-    // Each step either decides (one match, or several: ambiguous) or defers.
     for is_match in steps {
-        let mut found = profiles.iter().filter(|profile| is_match(profile));
-        match (found.next(), found.next()) {
-            (None, _) => {}
-            (Some(profile), None) => return Some(profile),
-            (Some(_), Some(_)) => return None,
+        match matching(profiles, is_match) {
+            Lookup::NotFound => {}
+            decided => return decided,
         }
     }
-    None
+    Lookup::NotFound
+}
+
+/// The profile for Steam app `appid` (the app id step of [`lookup`] alone,
+/// for commands that take an app id).
+#[must_use]
+pub fn lookup_appid(profiles: &[GameProfile], appid: u32) -> Lookup<'_> {
+    matching(profiles, |profile| profile_appid(profile) == Some(appid))
+}
+
+fn profile_appid(profile: &GameProfile) -> Option<u32> {
+    profile.steam.as_ref().map(|steam| steam.appid)
+}
+
+/// Every profile `is_match` accepts, as a [`Lookup`].
+fn matching<'a>(
+    profiles: &'a [GameProfile],
+    is_match: impl Fn(&GameProfile) -> bool,
+) -> Lookup<'a> {
+    let mut found: Vec<&GameProfile> = profiles.iter().filter(|p| is_match(p)).collect();
+    match found.len() {
+        0 => Lookup::NotFound,
+        1 => Lookup::Found(found.remove(0)),
+        _ => Lookup::Ambiguous(found),
+    }
 }
 
 #[cfg(test)]
@@ -1191,6 +1243,42 @@ status = "playable"
         assert!(resolve(&twins, "7").is_none(), "ambiguous app id");
         assert!(resolve(&twins, "same").is_none(), "ambiguous name");
         assert_eq!(resolve(&twins, "b").map(|p| p.id.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn lookup_tells_ambiguity_from_no_match() {
+        let twins = vec![
+            profile("ron", "Rise of Nations", Some(287_450)),
+            profile("ron-wined3d", "Rise of Nations on WineD3D", Some(287_450)),
+        ];
+        let ids = |lookup: Lookup<'_>| -> Vec<String> {
+            match lookup {
+                Lookup::Ambiguous(found) => found.iter().map(|p| p.id.clone()).collect(),
+                other => panic!("expected an ambiguous lookup, got {other:?}"),
+            }
+        };
+        assert_eq!(ids(lookup(&twins, "287450")), ["ron", "ron-wined3d"]);
+        assert_eq!(ids(lookup_appid(&twins, 287_450)), ["ron", "ron-wined3d"]);
+        assert_eq!(ids(lookup(&twins, "nations")), ["ron", "ron-wined3d"]);
+        assert_eq!(
+            lookup(&twins, "ron").found().map(|p| p.id.as_str()),
+            Some("ron")
+        );
+        assert_eq!(lookup(&twins, "civilization"), Lookup::NotFound);
+        assert_eq!(lookup_appid(&twins, 70), Lookup::NotFound);
+        assert_eq!(
+            lookup_appid(&library(), 813_780)
+                .found()
+                .map(|p| p.id.as_str()),
+            Some("age-of-empires-2-definitive-edition")
+        );
+        assert_eq!(
+            lookup_appid(&library(), 287_450)
+                .found()
+                .map(|p| p.id.as_str()),
+            Some("rise-of-nations-extended-edition"),
+            "only the app id counts, not an id made of digits"
+        );
     }
 
     #[test]
