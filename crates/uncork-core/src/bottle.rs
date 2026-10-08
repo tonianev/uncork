@@ -773,7 +773,8 @@ pub struct DisplayRegistry {
     /// when it is not set, which Wine takes as off.
     pub retina_mode: Option<bool>,
     /// `HKCU\Control Panel\Desktop` `LogPixels`; `None` when it is not set
-    /// (Wine then falls back to the machine's value, normally 96).
+    /// (Wine then falls back to the machine's value,
+    /// `HKCC\Software\Fonts` `LogPixels`, which `wine.inf` sets to 96).
     pub log_pixels: Option<u32>,
 }
 
@@ -820,22 +821,39 @@ impl DisplayRegistry {
         self.retina_mode == Some(true) || self.log_pixels.is_some_and(|dpi| dpi >= RETINA_DPI)
     }
 
-    /// `true` when `LogPixels` is set and is not [`dpi_for`] the Retina
-    /// mode Wine uses (a missing `RetinaMode` counts as off, as in Wine):
-    /// a pair Uncork never writes, which shows programs that are not
-    /// DPI-aware a screen of the wrong size.
+    /// Retina mode as Wine uses it: a missing `RetinaMode` is off.
     #[must_use]
-    pub fn disagrees(&self) -> bool {
-        self.log_pixels
-            .is_some_and(|dpi| dpi != dpi_for(self.retina_mode.unwrap_or(false)))
+    pub fn effective_retina(&self) -> bool {
+        self.retina_mode.unwrap_or(false)
     }
 
-    /// `true` when a value that is set differs from what
-    /// [`default_registry`] writes for `retina`.
+    /// The DPI as Wine uses it: a missing `LogPixels` is [`STANDARD_DPI`],
+    /// the machine-wide value Wine falls back to (`wine.inf` sets it to 96;
+    /// Uncork does not read `system.reg` for it).
+    #[must_use]
+    pub fn effective_dpi(&self) -> u32 {
+        self.log_pixels.unwrap_or(STANDARD_DPI)
+    }
+
+    /// `true` when the DPI Wine uses is not [`dpi_for`] the Retina mode
+    /// Wine uses ([`Self::effective_dpi`], [`Self::effective_retina`]): a
+    /// pair Uncork never writes, which shows programs that are not
+    /// DPI-aware a screen of the wrong size. That includes `RetinaMode y`
+    /// without a `LogPixels` (Retina mode with 96 DPI), which Retina
+    /// bottles made before Uncork wrote the DPI have.
+    #[must_use]
+    pub fn disagrees(&self) -> bool {
+        self.effective_dpi() != dpi_for(self.effective_retina())
+    }
+
+    /// `true` when Wine would not use what [`default_registry`] writes for
+    /// `retina`: Retina mode or the DPI, with missing values read as Wine
+    /// reads them ([`Self::effective_retina`], [`Self::effective_dpi`]).
+    /// Whenever [`Self::disagrees`] is `true`, this is too, whatever
+    /// `retina` is, so rewriting the pair from `uncork.toml` repairs it.
     #[must_use]
     pub fn differs_from(&self, retina: bool) -> bool {
-        self.retina_mode.is_some_and(|on| on != retina)
-            || self.log_pixels.is_some_and(|dpi| dpi != dpi_for(retina))
+        self.effective_retina() != retina || self.effective_dpi() != dpi_for(retina)
     }
 
     /// `RetinaMode y, LogPixels 192`, for messages; unset values are
@@ -1436,13 +1454,28 @@ mod tests {
             (pair(Some(true), Some(192)), true),
             (pair(Some(false), Some(96)), false),
             (pair(None, Some(96)), false),
+            (pair(Some(false), None), false),
             (pair(None, None), false),
-            (pair(Some(true), None), true),
         ] {
             assert!(!registry.disagrees(), "{registry:?}");
             assert_eq!(registry.wants_retina(), retina, "{registry:?}");
             assert!(!registry.differs_from(retina), "{registry:?}");
+            assert!(registry.differs_from(!retina), "{registry:?}");
         }
+        // Missing values are what Wine uses: Retina mode off, 96 DPI.
+        assert_eq!(
+            (
+                pair(None, None).effective_retina(),
+                pair(None, None).effective_dpi()
+            ),
+            (false, 96)
+        );
+        // Retina bottles made before Uncork wrote the DPI: Retina mode
+        // with Wine's 96 DPI. Flagged, and rewritten by the fix.
+        let old_retina = pair(Some(true), None);
+        assert!(old_retina.disagrees());
+        assert!(old_retina.wants_retina());
+        assert!(old_retina.differs_from(true) && old_retina.differs_from(false));
         // Seen on 2026-10-08: Uncork's RetinaMode n next to CrossOver's 192.
         let mixed = pair(Some(false), Some(192));
         assert!(mixed.disagrees());
@@ -1451,9 +1484,14 @@ mod tests {
             "192 DPI means the prefix was set up for Retina"
         );
         assert!(mixed.differs_from(false) && mixed.differs_from(true));
+        let unset_mode = pair(None, Some(192));
         assert!(
-            pair(None, Some(192)).disagrees(),
+            unset_mode.disagrees(),
             "Wine takes a missing RetinaMode as off"
+        );
+        assert!(
+            unset_mode.differs_from(true) && unset_mode.differs_from(false),
+            "so `bottle set ... performance.retina=true` rewrites it"
         );
         assert!(pair(Some(true), Some(96)).disagrees());
         assert!(pair(Some(false), Some(144)).disagrees());

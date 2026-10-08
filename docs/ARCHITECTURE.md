@@ -273,7 +273,7 @@ Steamworks games need the Windows Steam client running in the same prefix and wi
 | `d3dmetal` | Not imported (info: optional, 64-bit Direct3D 11/12) | `uncork runtime import-gptk <path>` |
 | `bottles` | No bottles (info) | `uncork setup` |
 | `bottle-wine` | A bottle's Wine version is not installed (warn, per bottle) | `uncork runtime install wine` or `uncork bottle set <name> wine=<v>` |
-| `bottle-dpi` | A bottle's `user.reg` has a Retina mode and DPI that disagree, or that do not match its `performance.retina` (warn, per bottle; `host::bottle_dpi`, read offline) | `uncork bottle set <name> performance.retina=<its setting>` |
+| `bottle-dpi` | A bottle's `user.reg` has a Retina mode and DPI that disagree, or that do not match its `performance.retina` (warn, per bottle; `host::bottle_dpi`, read offline). A missing value counts as Wine reads it: `RetinaMode` off, `LogPixels` 96 | `uncork bottle set <name> performance.retina=<its setting>` |
 | `crossover` | CrossOver is installed (info: its bottles can be imported) | `uncork bottle import` |
 
 One gap between the checks and reality: `macos-version` accepts macOS 14, but the catalog's Wine runtime is built for macOS 26.0 and later (`minos` in its Mach-O load commands). On 2026-10-07, after the fixes through commit 7dcd07a, `uncork doctor` reported `dxvk-installed` ok on the development Mac.

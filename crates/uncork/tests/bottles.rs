@@ -100,6 +100,8 @@ fn bottle_lifecycle_with_a_fake_wine() {
         .success()
         .stdout(contains("Updated the bottle's registry"));
     assert_eq!(regedits(&home), before + 1);
+    // What Wine's regedit leaves in user.reg (the fake one writes nothing).
+    fs::write(prefix.join("user.reg"), user_reg("y", 192)).unwrap();
     home.uncork()
         .args(["bottle", "set", "test1", "performance.retina=yes"])
         .assert()
@@ -349,6 +351,65 @@ fn bottle_set_repairs_a_retina_and_dpi_pair_that_disagrees() {
             .any(|check| check["id"] == "bottle-dpi"),
         "{doctor:#}"
     );
+}
+
+#[test]
+fn bottle_set_repairs_a_retina_bottle_with_a_missing_value() {
+    let home = Home::new();
+    home.install_fake_wine();
+    let dir = home.write_bottle("r", FAKE_WINE);
+    fs::write(
+        dir.join("uncork.toml"),
+        format!("schema = 1\nname = \"r\"\nwine = {FAKE_WINE:?}\n[performance]\nretina = true\n"),
+    )
+    .unwrap();
+    let regedits = |home: &Home| {
+        home.calls()
+            .iter()
+            .filter(|call| call.starts_with("wine regedit"))
+            .count()
+    };
+    let header = "WINE REGISTRY Version 2\n;; All keys relative to \\\\User\\\\S-1-5-21-0-0-0-1000\n\n#arch=win64\n\n";
+    for (user_reg, found) in [
+        // An import whose registry write failed: CrossOver's 192 DPI, no
+        // RetinaMode, so Wine runs with Retina mode off.
+        (
+            "[Control Panel\\\\Desktop] 1759800000\n\"LogPixels\"=dword:000000c0\n",
+            "RetinaMode not set, LogPixels 192",
+        ),
+        // A Retina bottle made before Uncork wrote the DPI: Wine's 96.
+        (
+            "[Software\\\\Wine\\\\Mac Driver] 1759800000\n\"RetinaMode\"=\"y\"\n",
+            "RetinaMode y, LogPixels not set",
+        ),
+    ] {
+        fs::write(dir.join("user.reg"), format!("{header}{user_reg}")).unwrap();
+        let doctor = home.json(&["doctor"]);
+        let check = doctor["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["id"] == "bottle-dpi")
+            .unwrap_or_else(|| panic!("{found}: {doctor:#}"))
+            .clone();
+        assert!(
+            check["summary"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("Retina mode and DPI disagree ({found})")),
+            "{check}"
+        );
+        assert_eq!(check["fix"], "uncork bottle set r performance.retina=true");
+
+        let before = regedits(&home);
+        home.uncork()
+            .args(["bottle", "set", "r", "performance.retina=true"])
+            .assert()
+            .success()
+            .stdout(contains("Nothing changed").not())
+            .stdout(contains("Retina mode on, 192 DPI"));
+        assert_eq!(regedits(&home), before + 1, "{found}");
+    }
 }
 
 #[test]

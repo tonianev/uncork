@@ -1084,12 +1084,27 @@ mod tests {
             "bottle \"steam\": its registry (RetinaMode y, LogPixels 192) does not match performance.retina = false in uncork.toml"
         );
 
+        // A Retina bottle made before Uncork wrote the DPI: Retina mode
+        // with Wine's 96 DPI.
+        let check = bottle_dpi(&retina, &pair(Some(true), None)).unwrap();
+        assert_eq!(
+            check.summary,
+            "bottle \"hires\": Retina mode and DPI disagree (RetinaMode y, LogPixels not set), so games that are not DPI-aware see a screen of the wrong size"
+        );
+        assert_eq!(
+            check.fix.as_deref(),
+            Some("uncork bottle set hires performance.retina=true")
+        );
+        // Retina mode on in uncork.toml, but nothing in the registry.
+        let check = bottle_dpi(&retina, &pair(None, None)).unwrap();
+        assert!(check.summary.contains("does not match"), "{check:?}");
+
         for (bottle, registry) in [
             (&steam, pair(Some(false), Some(96))),
             (&steam, pair(None, None)),
             (&steam, pair(Some(false), None)),
+            (&steam, pair(None, Some(96))),
             (&retina, pair(Some(true), Some(192))),
-            (&retina, pair(Some(true), None)),
         ] {
             assert_eq!(bottle_dpi(bottle, &registry), None, "{registry:?}");
         }
