@@ -90,7 +90,7 @@ pub(super) fn run(ctx: &Ctx, args: &SetupArgs) -> anyhow::Result<ExitCode> {
         println!("Components and bottle are ready. Install Steam later with: uncork steam install");
         return Ok(ExitCode::SUCCESS);
     };
-    super::steam::install_and_start(ctx, &bottle, &wine)
+    super::steam::install_and_start(ctx, &mut bottle, &wine)
 }
 
 /// Fail early, with the fix, when Rosetta 2 is missing; Wine is x86-64.

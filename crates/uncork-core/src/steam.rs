@@ -78,6 +78,7 @@ use uncork_steam::{InstalledApp, SteamInstall};
 use crate::Error;
 use crate::bottle::Bottle;
 use crate::component::{ComponentKind, InstalledComponent};
+use crate::display::Display;
 use crate::download::Progress;
 use crate::launch::{LaunchOptions, LaunchPlan, OVERRIDES_VAR, PlanContext, Target};
 use crate::paths::Layout;
@@ -570,6 +571,47 @@ fn stop_bottle_with(
     Ok(true)
 }
 
+/// The main display changed while a bottle ran.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DisplayChange {
+    /// The main display when the bottle's Wine session started
+    /// ([`crate::bottle::BottleState::session_display`]).
+    pub before: String,
+    /// The main display now ([`Display::signature`]).
+    pub now: String,
+}
+
+/// Whether the main display has changed since the running Wine session of
+/// `bottle` started: Wine reads the displays when its wineserver starts, so
+/// after a display is plugged in or unplugged, or another display becomes
+/// the main one, a game started in that session sees the old ones (wrong
+/// sizes and offsets). `None` when either signature is unknown (a probe
+/// that failed never triggers a restart), when they are equal, or when no
+/// wineserver runs (the next session starts fresh); only then is the
+/// wineserver asked about.
+///
+/// # Errors
+/// [`server_running`]'s.
+pub fn display_change(
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    display: Option<&Display>,
+) -> crate::Result<Option<DisplayChange>> {
+    let (Some(before), Some(now)) = (
+        bottle.state.session_display.as_deref(),
+        display.map(Display::signature),
+    ) else {
+        return Ok(None);
+    };
+    if before == now || !server_running(bottle, wine)? {
+        return Ok(None);
+    }
+    Ok(Some(DisplayChange {
+        before: before.to_owned(),
+        now,
+    }))
+}
+
 /// Record that no Steam client runs in `bottle` (set
 /// `HKCU\Software\Valve\Steam\ActiveProcess\pid` to 0 with `wine reg add`).
 /// For after the bottle's processes were killed: a killed client leaves its
@@ -854,29 +896,35 @@ fn describe_exit(status: ExitStatus) -> String {
 /// The DXVK used is the bottle's `graphics.dxvk` pin, else the newest
 /// installed; without one the client still starts (with a warning: its
 /// windows will be black). A running client is left alone, DLLs included;
-/// a stale pid does not count as one ([`is_running`]).
+/// a stale pid does not count as one ([`is_running`]). When no wineserver
+/// ran before, the client starts a new Wine session, and `display` (the
+/// main display now, `None` when unknown) is recorded as the session's
+/// ([`Bottle::record_session_display`]).
 ///
 /// # Errors
 /// [`crate::Error::Command`] on timeout, naming the client log.
 pub fn ensure_running(
     layout: &Layout,
-    bottle: &Bottle,
+    bottle: &mut Bottle,
     wine: &WineRuntime,
+    display: Option<&Display>,
     timeout: Duration,
 ) -> crate::Result<()> {
-    start_if_needed(layout, bottle, wine, timeout, POLL_INTERVAL).map(|_started| ())
+    start_if_needed(layout, bottle, wine, display, timeout, POLL_INTERVAL).map(|_started| ())
 }
 
 /// [`ensure_running`] with a configurable polling interval; `true` if it
 /// started the client.
 fn start_if_needed(
     layout: &Layout,
-    bottle: &Bottle,
+    bottle: &mut Bottle,
     wine: &WineRuntime,
+    display: Option<&Display>,
     timeout: Duration,
     poll: Duration,
 ) -> crate::Result<bool> {
-    if is_running(bottle, wine)? {
+    let status = client_status(bottle, wine)?;
+    if status.running {
         return Ok(false);
     }
     let steam = find_steam(bottle)?;
@@ -884,6 +932,9 @@ fn start_if_needed(
     let (args, _) = client::silent_client_args(&[]);
     let spec = client_spec(bottle, wine, &steam, args);
     tracing::info!("starting Steam in bottle {}", bottle.config.name);
+    if !status.server {
+        bottle.record_session_display(display.map(Display::signature).as_deref());
+    }
     reap_in_background(crate::process::spawn(&spec)?);
     wait_until_running(bottle, wine, timeout, poll, &spec)?;
     Ok(true)
@@ -1201,19 +1252,30 @@ pub struct PlayOutcome {
     pub ini_changed: Vec<std::path::PathBuf>,
     /// `true` if Steam had to be started first.
     pub started_steam: bool,
+    /// The main display changed since the bottle's running Wine session
+    /// started, so the bottle was stopped (a dry run only reports it).
+    pub display_change: Option<DisplayChange>,
 }
 
 /// Play Steam app `appid` in `bottle`: the whole `uncork play` flow, shared
 /// by the CLI and (later) the macOS app.
 ///
-/// 1. Find the app ([`plan_game`] with `profile`, `args`, `options`).
-/// 2. `dry_run`: return the plan without touching anything.
-/// 3. Apply the profile's INI edits ([`crate::launch::apply_profile_ini`]).
-/// 4. By launch mode: `Direct` → [`ensure_running`] (timeout
+/// 1. Find the app ([`plan_game`] with `profile`, `display`, `args`,
+///    `options`).
+/// 2. Check whether the main display changed since the bottle's running
+///    Wine session started ([`display_change`]). `dry_run`: add a warning
+///    saying so to the plan and return it without touching anything.
+/// 3. When it changed, stop the bottle ([`stop_bottle`], Steam getting
+///    [`SHUTDOWN_GRACE`] at most `steam_timeout`), so Steam and the game
+///    start again in a session that knows the new display.
+/// 4. Apply the profile's INI edits ([`crate::launch::apply_profile_ini`],
+///    `{display.*}` values from `display`).
+/// 5. By launch mode: `Direct` → [`ensure_running`] (timeout
 ///    `steam_timeout`) then [`crate::launch::execute`] the plan;
 ///    `Applaunch` → [`stop`] a running client, then start the client with the
 ///    game's environment and `-applaunch <appid> <args>` (the game inherits
-///    it); `Standalone` → execute the plan without Steam.
+///    it); `Standalone` → execute the plan without Steam. Whatever starts a
+///    new Wine session records `display` as its main display.
 ///
 /// The launch mode is the profile's ([`GameProfile::launch_mode`]), and
 /// [`LaunchMode::Direct`] without a profile. `%INSTALLDIR%` in INI paths is
@@ -1234,6 +1296,7 @@ pub fn play(
     wine: &WineRuntime,
     components: &[crate::component::InstalledComponent],
     profile: Option<&crate::profile::GameProfile>,
+    display: Option<&Display>,
     appid: u32,
     args: &[String],
     options: &LaunchOptions,
@@ -1243,6 +1306,7 @@ pub fn play(
     let request = PlayRequest {
         components,
         profile,
+        display,
         appid,
         args,
         options,
@@ -1257,6 +1321,7 @@ pub fn play(
 struct PlayRequest<'a> {
     components: &'a [InstalledComponent],
     profile: Option<&'a GameProfile>,
+    display: Option<&'a Display>,
     appid: u32,
     args: &'a [String],
     options: &'a LaunchOptions,
@@ -1281,10 +1346,18 @@ fn play_with(
         wine,
         components: request.components,
         profile: request.profile,
+        display: request.display,
     };
-    let plan = plan_found_game(ctx, &app, request.args, request.options)?;
+    let mut plan = plan_found_game(ctx, &app, request.args, request.options)?;
     let mode = launch_mode(request.profile);
+    let display_change = display_change(bottle, wine, request.display)?;
     if dry_run {
+        if let Some(change) = &display_change {
+            plan.warnings.push(format!(
+                "the main display changed since bottle {} started ({} → {}); a real launch stops the bottle first, so the game sees the new display",
+                bottle.config.name, change.before, change.now
+            ));
+        }
         return Ok(PlayOutcome {
             log: plan.log.clone(),
             plan,
@@ -1292,18 +1365,38 @@ fn play_with(
             child: None,
             ini_changed: Vec::new(),
             started_steam: false,
+            display_change,
         });
     }
+    if let Some(change) = &display_change {
+        tracing::info!(
+            "the main display changed since bottle {} started ({} → {}); restarting it",
+            bottle.config.name,
+            change.before,
+            change.now
+        );
+        let grace = request.shutdown_grace.min(request.steam_timeout);
+        stop_bottle_with(bottle, wine, grace, request.poll)?;
+    }
     let ini_changed = match request.profile {
-        Some(profile) => {
-            crate::launch::apply_profile_ini(profile, bottle, Some(&app.install_path))?
-        }
+        Some(profile) => crate::launch::apply_profile_ini(
+            profile,
+            bottle,
+            Some(&app.install_path),
+            request.display,
+        )?,
         None => Vec::new(),
     };
     let (child, log, started_steam) = match mode {
         LaunchMode::Direct => {
-            let started =
-                start_if_needed(layout, bottle, wine, request.steam_timeout, request.poll)?;
+            let started = start_if_needed(
+                layout,
+                bottle,
+                wine,
+                request.display,
+                request.steam_timeout,
+                request.poll,
+            )?;
             let child = crate::launch::execute(&plan, bottle, wine)?;
             (child, plan.log.clone(), started)
         }
@@ -1323,6 +1416,7 @@ fn play_with(
         log,
         ini_changed,
         started_steam,
+        display_change,
     })
 }
 
@@ -1346,6 +1440,9 @@ fn applaunch(
     crate::launch::prepare(plan, bottle)?;
     let steam = find_steam(bottle)?;
     prepare_client_dxvk_logged(layout, bottle, &steam)?;
+    if !server_running(bottle, wine)? {
+        bottle.record_session_display(request.display.map(Display::signature).as_deref());
+    }
     let mut game_args: Vec<String> = request
         .profile
         .map(|profile| profile.launch.args.clone())
@@ -1551,6 +1648,7 @@ mod tests {
         PlayRequest {
             components,
             profile,
+            display: None,
             appid: 287_450,
             args,
             options,
@@ -1589,6 +1687,111 @@ mod tests {
         let env = &outcome.plan.command.env;
         assert_eq!(env.get("SteamAppId").map(String::as_str), Some("287450"));
         assert_eq!(env.get("SteamGameId").map(String::as_str), Some("287450"));
+    }
+
+    fn display(name: &str, width: u32, height: u32, hz: f64) -> Display {
+        Display {
+            name: name.to_owned(),
+            points: (width, height),
+            pixels: None,
+            refresh_hz: Some(hz),
+            main: true,
+            built_in: false,
+        }
+    }
+
+    #[test]
+    fn steam_records_the_display_its_session_starts_with() {
+        let mut fx = Fixture::new();
+        fx.add_game();
+        let components = fx.dxmt();
+        let options = LaunchOptions::default();
+        let built_in = display("Color LCD", 1728, 1117, 120.0);
+        let request = PlayRequest {
+            display: Some(&built_in),
+            ..quick(&components, None, &[], &options)
+        };
+        let mut outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        outcome.child.take().unwrap().wait().unwrap();
+        assert!(outcome.started_steam);
+        assert_eq!(outcome.display_change, None);
+        assert_eq!(
+            fx.bottle.state.session_display.as_deref(),
+            Some("Color LCD 1728x1117 @120Hz")
+        );
+        let saved = fs::read_to_string(fx.bottle.path.join(crate::bottle::STATE_FILE)).unwrap();
+        assert!(
+            saved.contains("session_display = \"Color LCD 1728x1117 @120Hz\""),
+            "{saved}"
+        );
+    }
+
+    #[test]
+    fn a_changed_main_display_restarts_steam_before_the_game() {
+        let mut fx = Fixture::new();
+        let dir = fx.add_game();
+        let components = fx.dxmt();
+        let options = LaunchOptions::default();
+        // Steam runs in a session that started on the built-in display.
+        fx.bottle
+            .record_session_display(Some("Color LCD 1728x1117 @120Hz"));
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fx.flag("server");
+        fx.flag("shutdown-works");
+        let external = display("LG UltraFine", 2560, 1440, 60.0);
+        let request = PlayRequest {
+            display: Some(&external),
+            ..quick(&components, None, &[], &options)
+        };
+
+        let mut outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        outcome.child.take().unwrap().wait().unwrap();
+
+        let change = outcome.display_change.unwrap();
+        assert_eq!(change.before, "Color LCD 1728x1117 @120Hz");
+        assert_eq!(change.now, "LG UltraFine 2560x1440 @60Hz");
+        assert!(outcome.started_steam, "Steam started again");
+        let shutdown = fx.position("steam.exe -shutdown");
+        let kill = fx.position("wineserver --kill");
+        let start = fx.position("steam.exe -silent -nofriendsui |");
+        let game = fx.position(&format!("{} |", dir.join("riseofnations.exe").display()));
+        assert!(
+            shutdown < kill && kill < start && start < game,
+            "{:#?}",
+            fx.calls()
+        );
+        assert_eq!(
+            fx.bottle.state.session_display.as_deref(),
+            Some("LG UltraFine 2560x1440 @60Hz")
+        );
+    }
+
+    #[test]
+    fn stopping_a_bottle_asks_steam_to_exit_first() {
+        let fx = Fixture::new();
+        fx.install_steam();
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fx.flag("server");
+        fx.flag("shutdown-works");
+        let stopped = stop_bottle_with(
+            &fx.bottle,
+            &fx.wine,
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        assert!(stopped);
+        let shutdown = fx.position("steam.exe -shutdown");
+        let kill = fx.position("wineserver --kill");
+        let forget = fx.position(r"wine reg add HKCU\Software\Valve\Steam\ActiveProcess");
+        assert!(shutdown < kill && kill < forget, "{:#?}", fx.calls());
+        assert!(
+            fx.calls().last().unwrap().starts_with("wineserver --wait"),
+            "{:#?}",
+            fx.calls()
+        );
+        assert!(!fx.state.join("server").exists());
+        assert_eq!(fx.pid().as_deref(), Some("0x0"));
     }
 
     #[test]
@@ -1943,10 +2146,12 @@ mod tests {
         fx.install_steam();
         // The pid of a client that crashed; its wineserver has exited.
         fs::write(fx.state.join("pid"), "0x274").unwrap();
+        let mut fx = fx;
         let started = start_if_needed(
             &fx.layout,
-            &fx.bottle,
+            &mut fx.bottle,
             &fx.wine,
+            None,
             Duration::from_secs(5),
             Duration::from_millis(10),
         )
@@ -2011,10 +2216,12 @@ mod tests {
     fn start_reports_whether_it_started_the_client() {
         let fx = Fixture::new();
         fx.install_steam();
+        let mut fx = fx;
         let started = start_if_needed(
             &fx.layout,
-            &fx.bottle,
+            &mut fx.bottle,
             &fx.wine,
+            None,
             Duration::from_secs(5),
             Duration::from_millis(20),
         )
@@ -2022,8 +2229,9 @@ mod tests {
         assert!(started);
         let again = start_if_needed(
             &fx.layout,
-            &fx.bottle,
+            &mut fx.bottle,
             &fx.wine,
+            None,
             Duration::from_secs(5),
             Duration::from_millis(20),
         )

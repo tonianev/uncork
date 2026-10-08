@@ -374,6 +374,8 @@ mod tests {
             log: PathBuf::from("/u/logs/steam-riseofnations-1.log"),
             warnings: Vec::new(),
             game_mode: None,
+            frame_cap: None,
+            display: None,
         }
     }
 

@@ -1214,23 +1214,28 @@ fn execute_puts_the_backend_in_place_and_starts_the_command() {
     );
 
     let calls = fx.calls();
-    assert_eq!(calls.len(), 1, "{calls:#?}");
+    assert_eq!(calls.len(), 2, "{calls:#?}");
+    assert!(
+        calls[0].starts_with("wineserver -k0 |"),
+        "is a Wine session starting? {}",
+        calls[0]
+    );
     // The shell reports the physical directory (/var is a symlink on macOS).
     let cwd = fs::canonicalize(exe.parent().unwrap()).unwrap();
     assert!(
-        calls[0].starts_with(&format!("wine {} | cwd={} ", exe.display(), cwd.display())),
+        calls[1].starts_with(&format!("wine {} | cwd={} ", exe.display(), cwd.display())),
         "{}",
-        calls[0]
+        calls[1]
     );
     assert!(
-        calls[0].contains("WINEDLLOVERRIDES=d3d10,d3d12,d3d12core=b;winemenubuilder.exe=d;d3d10core,d3d11,dxgi=n,b "),
+        calls[1].contains("WINEDLLOVERRIDES=d3d10,d3d12,d3d12core=b;winemenubuilder.exe=d;d3d10core,d3d11,dxgi=n,b "),
         "{}",
-        calls[0]
+        calls[1]
     );
     assert!(
-        calls[0].contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin"),
+        calls[1].contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin"),
         "{}",
-        calls[0]
+        calls[1]
     );
     assert!(plan.log.is_file(), "output goes to the log");
 }
@@ -1380,7 +1385,7 @@ value = \"0\"
 "
     ));
 
-    let changed = apply_profile_ini(&game_profile, &bottle, Some(&install)).unwrap();
+    let changed = apply_profile_ini(&game_profile, &bottle, Some(&install), None).unwrap();
     assert_eq!(
         changed,
         std::slice::from_ref(&rise2),
@@ -1397,12 +1402,12 @@ value = \"0\"
             .exists()
     );
     assert_eq!(
-        apply_profile_ini(&game_profile, &bottle, Some(&install)).unwrap(),
+        apply_profile_ini(&game_profile, &bottle, Some(&install), None).unwrap(),
         Vec::<PathBuf>::new(),
         "idempotent"
     );
 
-    let err = apply_profile_ini(&game_profile, &bottle, None).unwrap_err();
+    let err = apply_profile_ini(&game_profile, &bottle, None, None).unwrap_err();
     assert!(
         matches!(&err, Error::Config { what: "profile", message, .. } if message.contains("%INSTALLDIR% needs")),
         "{err:?}"

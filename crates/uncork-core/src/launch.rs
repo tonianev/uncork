@@ -47,6 +47,15 @@
 //! A fixed backend (1 or 3) that is not usable is an error naming the fix;
 //! a profile's preference that is not usable falls back silently in the
 //! choice but is reported in [`LaunchPlan::warnings`].
+//!
+//! # The main display
+//!
+//! [`PlanContext::display`] is the main display ([`crate::display`]), or
+//! `None` when it could not be read. It sets the frame cap
+//! ([`LaunchPlan::frame_cap`]), resolves `{display.*}` placeholders in a
+//! profile's INI values ([`resolve_ini_value`]), and its signature is
+//! recorded as the bottle's session display when a launch starts a new
+//! Wine session ([`execute`]).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -58,6 +67,7 @@ use uncork_pe::{Bitness, GameScan, GraphicsApi};
 use crate::Error;
 use crate::bottle::Bottle;
 use crate::component::{InstalledComponent, compare_versions};
+use crate::display::Display;
 use crate::graphics::{Activation, Availability, Backend, BackendChoice, BackendOptions};
 use crate::paths::Layout;
 use crate::process::CommandSpec;
@@ -158,7 +168,40 @@ pub struct LaunchPlan {
     /// Start through a Game Mode app bundle instead of directly
     /// (experimental; [`crate::gamemode`]).
     pub game_mode: Option<GameModeLaunch>,
+    /// The frame-rate cap the backend is asked for; `None` when the backend
+    /// has no cap Uncork sets (every backend but DXMT).
+    pub frame_cap: Option<FrameCap>,
+    /// The main display's signature ([`Display::signature`]) at planning
+    /// time; recorded as the bottle's session display when this launch
+    /// starts a new Wine session ([`execute`]).
+    pub display: Option<String>,
 }
+
+/// The frame-rate cap of a launch (DXMT:
+/// `DXMT_CONFIG=d3d11.preferredMaxFrameRate=<fps>`). DXMT paces frames
+/// itself; without a cap it uses the refresh rate it reads when the game
+/// creates its swapchain, and after the game leaves exclusive full screen
+/// it runs uncapped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FrameCap {
+    /// Frames per second; `None` is uncapped (`max_fps = 0`).
+    pub fps: Option<u32>,
+    /// Where the value comes from, for `--dry-run`: `performance.max_fps in
+    /// profile <id>`, `performance.max_fps in bottle <name>`, `the main
+    /// display's refresh rate (<signature>)` or `the default (the main
+    /// display's refresh rate is unknown)`.
+    pub source: String,
+    /// A `DXMT_CONFIG` from the bottle's or the profile's `env` or from
+    /// `--env` replaces Uncork's, so `fps` does not apply.
+    pub overridden: bool,
+}
+
+/// The frame cap when nothing sets one and the main display's refresh rate
+/// is unknown: it divides every common refresh rate (60, 120, 240 Hz).
+pub const DEFAULT_MAX_FPS: u32 = 60;
+
+/// DXMT's configuration variable.
+const DXMT_CONFIG: &str = "DXMT_CONFIG";
 
 /// Where and as what a plan is wrapped for Game Mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -184,6 +227,9 @@ pub struct PlanContext<'a> {
     pub components: &'a [crate::component::InstalledComponent],
     /// Matching game profile, if any.
     pub profile: Option<&'a GameProfile>,
+    /// The main display ([`crate::display::probe_main`]); `None` when
+    /// unknown.
+    pub display: Option<&'a Display>,
 }
 
 /// Plan a launch.
@@ -216,6 +262,20 @@ pub struct PlanContext<'a> {
 ///   profile's `performance` values that are set, and forced on by `--hud`,
 ///   `--metalfx` and `--retina`. Retina mode and msync are bottle-wide; a
 ///   request that differs from the bottle's setting becomes a warning.
+/// - Frame cap ([`LaunchPlan::frame_cap`], DXMT only): the profile's
+///   `performance.max_fps`, else the bottle's, else the main display's
+///   refresh rate rounded to whole Hz, else [`DEFAULT_MAX_FPS`]; `0` is
+///   uncapped. An explicit value that does not divide the display's refresh
+///   rate gets a warning (DXMT needs one that does).
+/// - DXMT's MetalFX swapchain (`--metalfx`, `performance.metalfx`) is left
+///   off, with a warning, in a bottle with Retina mode on: it would upscale
+///   to twice the native resolution.
+/// - A profile INI value with a `{display.*}` placeholder that cannot be
+///   resolved (the main display is unknown) gets a warning; the launch
+///   leaves that key alone ([`apply_profile_ini`]).
+/// - The bottle's registry having a Retina mode and DPI pair Uncork never
+///   writes ([`crate::bottle::DisplayRegistry::disagrees`], read from
+///   `user.reg`) gets a warning naming `uncork bottle set`.
 ///
 /// # Errors
 /// PE scan, component lookup, or backend errors.
@@ -232,23 +292,43 @@ pub fn plan(
         mut warnings,
     } = select(ctx, target, options)?;
     let performance = Performance::effective(ctx.bottle, ctx.profile, options);
+    let metalfx_over_retina =
+        backend == Backend::Dxmt && performance.metalfx && ctx.bottle.config.performance.retina;
+    let cap = choose_frame_cap(ctx, &performance);
     let activation = crate::graphics::activation(
         backend,
         component,
         ctx.wine,
         ctx.bottle,
         BackendOptions {
-            metalfx: performance.metalfx,
+            metalfx: performance.metalfx && !metalfx_over_retina,
             hud: performance.hud,
             debug_logs: options
                 .wine_debug
                 .as_deref()
                 .is_some_and(|channels| !channels.trim().is_empty()),
+            max_fps: cap.fps,
         },
     )?;
     let env = launch_env(ctx, options, &activation, performance.avx);
     warnings.extend(program_warnings(ctx, &program, backend, &env));
     warnings.extend(setting_warnings(ctx, &performance));
+    if metalfx_over_retina {
+        let bottle = &ctx.bottle.config.name;
+        warnings.push(format!(
+            "MetalFX upscaling stays off for this launch: bottle {bottle} has Retina mode on, and DXMT's MetalFX swapchain would then render at twice the native resolution; turn one of them off (`uncork bottle set {bottle} performance.retina=false`, or leave out --metalfx and performance.metalfx)"
+        ));
+    }
+    let frame_cap = (backend == Backend::Dxmt).then(|| {
+        if let Some(warning) = cap_warning(ctx, &performance, &cap) {
+            warnings.push(warning);
+        }
+        FrameCap {
+            overridden: env.get(DXMT_CONFIG) != activation.env.get(DXMT_CONFIG),
+            ..cap
+        }
+    });
+    warnings.extend(display_warnings(ctx));
 
     let profile_args = ctx
         .profile
@@ -308,7 +388,121 @@ pub fn plan(
         log,
         warnings,
         game_mode,
+        frame_cap,
+        display: ctx.display.map(Display::signature),
     })
+}
+
+/// The frame cap of the precedence documented on [`plan`].
+fn choose_frame_cap(ctx: PlanContext<'_>, performance: &Performance) -> FrameCap {
+    let (fps, source) = match &performance.max_fps {
+        Some((fps, source)) => (*fps, source.clone()),
+        None => match ctx.display.and_then(|display| {
+            display
+                .refresh_rounded()
+                .map(|hz| (hz, display.signature()))
+        }) {
+            Some((hz, signature)) => (hz, format!("the main display's refresh rate ({signature})")),
+            None => (
+                DEFAULT_MAX_FPS,
+                "the default (the main display's refresh rate is unknown)".to_owned(),
+            ),
+        },
+    };
+    FrameCap {
+        fps: (fps > 0).then_some(fps),
+        source,
+        overridden: false,
+    }
+}
+
+/// A warning when an explicit `max_fps` does not divide the main display's
+/// refresh rate.
+fn cap_warning(ctx: PlanContext<'_>, performance: &Performance, cap: &FrameCap) -> Option<String> {
+    performance.max_fps.as_ref()?;
+    let fps = cap.fps?;
+    let hz = ctx.display?.refresh_rounded()?;
+    (hz % fps != 0).then(|| {
+        format!(
+            "a frame cap of {fps} FPS ({}) does not divide the main display's {hz} Hz, and DXMT paces frames to the display, so frame times will be uneven; use a divisor of {hz} such as {}",
+            cap.source,
+            if hz % 60 == 0 { 60 } else { hz }
+        )
+    })
+}
+
+/// Warnings about the main display and the bottle's Retina mode and DPI.
+fn display_warnings(ctx: PlanContext<'_>) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let bottle = &ctx.bottle.config.name;
+    if let Some(registry) = crate::bottle::DisplayRegistry::read(&ctx.bottle.path)
+        && registry.disagrees()
+    {
+        warnings.push(format!(
+            "Retina mode and DPI disagree in bottle {bottle} ({}), so games that are not DPI-aware see a screen of the wrong size (cropped, offset full screen; crashes); fix it with `uncork bottle set {bottle} performance.retina={}`",
+            registry.describe(),
+            ctx.bottle.config.performance.retina
+        ));
+    }
+    if let Some(profile) = ctx.profile {
+        let unresolved: Vec<&str> = profile
+            .ini
+            .iter()
+            .filter(|ini| resolve_ini_value(&ini.value, ctx.display).is_none())
+            .map(|ini| ini.key.as_str())
+            .collect();
+        if !unresolved.is_empty() {
+            let unknown = match ctx.display {
+                None => format!(
+                    "the main display is unknown (`{} SPDisplaysDataType -json` gave no answer)",
+                    crate::display::SYSTEM_PROFILER
+                ),
+                Some(display) => format!(
+                    "the refresh rate of the main display ({}) is unknown",
+                    display.signature()
+                ),
+            };
+            warnings.push(format!(
+                "{unknown}, so {} leaves {} as they are",
+                profile.id,
+                unresolved.join(", ")
+            ));
+        }
+    }
+    warnings
+}
+
+/// `value` with the placeholders of
+/// [`crate::profile::INI_PLACEHOLDERS`] replaced from `display`:
+/// `{display.width}` and `{display.height}` by its "looks like" size in
+/// points, `{display.refresh}` by its refresh rate rounded to whole Hz.
+/// `None` when `value` has a placeholder whose value is unknown (no
+/// display, or no refresh rate). Other `{...}` text is kept as written
+/// ([`GameProfile::problems`] rejects it in profiles).
+#[must_use]
+pub fn resolve_ini_value(value: &str, display: Option<&Display>) -> Option<String> {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('{') {
+        let Some(len) = rest[start..].find('}') else {
+            break;
+        };
+        let token = &rest[start + 1..start + len];
+        let replacement = match token {
+            "display.width" => Some(display?.points.0.to_string()),
+            "display.height" => Some(display?.points.1.to_string()),
+            "display.refresh" => Some(display?.refresh_rounded()?.to_string()),
+            _ => None,
+        };
+        out.push_str(&rest[..start]);
+        match replacement {
+            Some(text) => out.push_str(&text),
+            None => out.push_str(&rest[start..=start + len]),
+        }
+        rest = &rest[start + len + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
 }
 
 /// A bundle id for a program without a profile: `<bottle>-<stem>`, lowercase,
@@ -339,16 +533,22 @@ fn game_mode_id(bottle: &str, stem: &str) -> String {
 /// with [`crate::graphics::apply_copies`], which records them in the bottle
 /// state. The registry is not touched: Retina mode is a bottle setting
 /// (`uncork bottle set`), and [`plan`] warns when a launch asks for another
-/// value.
+/// value. When no wineserver runs for the bottle
+/// ([`crate::steam::server_running`]), the program starts a new Wine
+/// session, and [`LaunchPlan::display`] is recorded as its main display
+/// ([`Bottle::record_session_display`]).
 ///
 /// # Errors
 /// I/O, registry or spawn errors.
 pub fn execute(
     plan: &LaunchPlan,
     bottle: &mut Bottle,
-    _wine: &WineRuntime,
+    wine: &WineRuntime,
 ) -> crate::Result<std::process::Child> {
     prepare(plan, bottle)?;
+    if !crate::steam::server_running(bottle, wine)? {
+        bottle.record_session_display(plan.display.as_deref());
+    }
     match &plan.game_mode {
         None => crate::process::spawn(&plan.command),
         Some(game_mode) => {
@@ -511,7 +711,10 @@ pub fn resolve_profile_path(
 /// Returns the files that changed.
 ///
 /// Files are processed in the order they first appear in the profile, and
-/// edits to one file are applied together in profile order.
+/// edits to one file are applied together in profile order. Values are
+/// resolved with [`resolve_ini_value`] from `display`; an edit whose value
+/// cannot be resolved (the main display is unknown) is skipped, and
+/// [`plan`] warns about it.
 ///
 /// # Errors
 /// [`crate::Error::Io`] from writing, or [`crate::Error::Config`] when a
@@ -520,6 +723,7 @@ pub fn apply_profile_ini(
     profile: &GameProfile,
     bottle: &Bottle,
     install_dir: Option<&std::path::Path>,
+    display: Option<&Display>,
 ) -> crate::Result<Vec<PathBuf>> {
     let mut groups: Vec<(PathBuf, Vec<crate::ini::IniSet>)> = Vec::new();
     for ini in &profile.ini {
@@ -540,10 +744,18 @@ pub fn apply_profile_ini(
                 ),
             }
         })?;
+        let Some(value) = resolve_ini_value(&ini.value, display) else {
+            tracing::debug!(
+                "not setting {} in {}: the main display is unknown",
+                ini.key,
+                path.display()
+            );
+            continue;
+        };
         let set = crate::ini::IniSet {
             section: ini.section.clone(),
             key: ini.key.clone(),
-            value: ini.value.clone(),
+            value,
         };
         match groups.iter_mut().find(|(known, _)| *known == path) {
             Some((_, sets)) => sets.push(set),
@@ -986,12 +1198,14 @@ fn file_name(path: &Path) -> String {
 // ----- environment and warnings -----
 
 /// Performance settings after the profile and command line are applied.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Performance {
     retina: bool,
     metalfx: bool,
     hud: bool,
     avx: bool,
+    /// An explicit `max_fps` and where it was set.
+    max_fps: Option<(u32, String)>,
 }
 
 impl Performance {
@@ -1002,11 +1216,24 @@ impl Performance {
     ) -> Performance {
         let base = &bottle.config.performance;
         let overrides = profile.map(|profile| &profile.performance);
+        let max_fps = match (profile, overrides.and_then(|o| o.max_fps)) {
+            (Some(profile), Some(fps)) => Some((
+                fps,
+                format!("performance.max_fps in profile {}", profile.id),
+            )),
+            _ => base.max_fps.map(|fps| {
+                (
+                    fps,
+                    format!("performance.max_fps in bottle {}", bottle.config.name),
+                )
+            }),
+        };
         Performance {
             retina: options.retina || overrides.and_then(|o| o.retina).unwrap_or(base.retina),
             metalfx: options.metalfx || overrides.and_then(|o| o.metalfx).unwrap_or(base.metalfx),
             hud: options.hud || base.hud,
             avx: overrides.and_then(|o| o.avx).unwrap_or(base.avx),
+            max_fps,
         }
     }
 }

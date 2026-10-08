@@ -8,8 +8,9 @@ use std::time::Duration;
 use anyhow::{Context as _, anyhow, bail};
 use serde::Serialize;
 use uncork_core::bottle::Bottle;
+use uncork_core::display::Display;
 use uncork_core::graphics::{Backend, BackendChoice, Strategy};
-use uncork_core::launch::{self, LaunchOptions, LaunchPlan, PlanContext, Target};
+use uncork_core::launch::{self, FrameCap, LaunchOptions, LaunchPlan, PlanContext, Target};
 use uncork_core::process::CommandSpec;
 use uncork_core::profile::{GameProfile, Lookup};
 use uncork_core::steam::{LaunchMode, PlayOutcome};
@@ -142,12 +143,14 @@ pub(super) fn play_steam_game(
     let mut bottle = ctx.open_bottle(flags.bottle.as_deref())?;
     let wine = bottle_wine(&ctx.layout, &bottle)?;
     let components = ctx.components()?;
+    let display = uncork_core::display::probe_main();
     let game = profile.map_or_else(|| format!("Steam app {appid}"), |p| p.name.clone());
     if !flags.dry_run {
         eprintln!(
             "Starting {game} in bottle {} (Steam starts first if needed; that can take a minute)",
             bottle.config.name
         );
+        restart_if_display_changed(&bottle, &wine, display.as_ref(), "game")?;
     }
     let outcome = uncork_core::steam::play(
         &ctx.layout,
@@ -155,6 +158,7 @@ pub(super) fn play_steam_game(
         &wine,
         &components,
         profile,
+        display.as_ref(),
         appid,
         args,
         options,
@@ -166,7 +170,7 @@ pub(super) fn play_steam_game(
     if flags.dry_run {
         let install_dir = steam_install_dir(&bottle, appid);
         let ini = profile.map_or_else(Vec::new, |profile| {
-            ini_edits(profile, &bottle, install_dir.as_deref())
+            ini_edits(profile, &bottle, install_dir.as_deref(), display.as_ref())
         });
         print_dry_run(ctx, &outcome.plan, &ini)?;
         return Ok(ExitCode::SUCCESS);
@@ -179,6 +183,35 @@ pub(super) fn play_steam_game(
         println!("Updated {}", file.display());
     }
     report_play(outcome, appid, &bottle, &wine, flags.wait)
+}
+
+/// Stop `bottle` when the main display changed since its running Wine
+/// session started ([`uncork_core::steam::display_change`]), saying so, so
+/// that the program (`what`: "game" or "program") starts in a session
+/// that knows the new display.
+fn restart_if_display_changed(
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    display: Option<&Display>,
+    what: &str,
+) -> anyhow::Result<()> {
+    let Some(change) = uncork_core::steam::display_change(bottle, wine, display)
+        .context("cannot tell whether the bottle is running")?
+    else {
+        return Ok(());
+    };
+    let since = if uncork_steam::SteamInstall::find(bottle.prefix()).is_some() {
+        "Steam started".to_owned()
+    } else {
+        format!("bottle {} started", bottle.config.name)
+    };
+    eprintln!(
+        "The main display changed since {since} ({} → {}); restarting the bottle so the {what} sees the new display",
+        change.before, change.now
+    );
+    uncork_core::steam::stop_bottle(bottle, wine, uncork_core::steam::SHUTDOWN_GRACE)
+        .with_context(|| format!("cannot stop bottle {}", bottle.config.name))?;
+    Ok(())
 }
 
 /// [`report_launch`] for `play`: in Applaunch mode the process Uncork
@@ -200,6 +233,12 @@ fn report_play(
         println!("Started {program} on {backend}.");
         return Ok(ExitCode::SUCCESS);
     };
+    if let Some(change) = &outcome.display_change {
+        println!(
+            "Restarted bottle {}: the main display changed ({} → {}).",
+            bottle.config.name, change.before, change.now
+        );
+    }
     let waited_for = if outcome.mode == LaunchMode::Applaunch {
         println!(
             "Started Steam in bottle {} with -applaunch {appid} (pid {}); Steam starts {program} on {backend}.",
@@ -276,6 +315,7 @@ pub(super) fn run(ctx: &Ctx, args: &RunArgs) -> anyhow::Result<ExitCode> {
     let exe = resolve_exe(&bottle, &args.exe)?;
     let wine = bottle_wine(&ctx.layout, &bottle)?;
     let components = ctx.components()?;
+    let display = uncork_core::display::probe_main();
     let target = Target::Exe {
         path: exe.clone(),
         args: args.args.clone(),
@@ -287,6 +327,7 @@ pub(super) fn run(ctx: &Ctx, args: &RunArgs) -> anyhow::Result<ExitCode> {
             wine: &wine,
             components: &components,
             profile: None,
+            display: display.as_ref(),
         },
         &target,
         &options,
@@ -297,6 +338,7 @@ pub(super) fn run(ctx: &Ctx, args: &RunArgs) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     print_warnings(&plan.warnings);
+    restart_if_display_changed(&bottle, &wine, display.as_ref(), "program")?;
     let child = launch::execute(&plan, &mut bottle, &wine)
         .with_context(|| format!("cannot start {}", exe.display()))?;
     report_launch(&plan, Some(child), &bottle, &wine, args.launch.wait)
@@ -345,15 +387,21 @@ pub(super) struct IniEditView {
     exists: bool,
     section: String,
     key: String,
+    /// The value as the profile writes it, placeholders included.
     value: String,
+    /// The value that would be written (`None` when a placeholder cannot
+    /// be resolved: the main display is unknown).
+    resolved: Option<String>,
     reason: String,
 }
 
-/// The INI edits `profile` makes before a launch.
+/// The INI edits `profile` makes before a launch, values resolved from
+/// `display`.
 fn ini_edits(
     profile: &GameProfile,
     bottle: &Bottle,
     install_dir: Option<&Path>,
+    display: Option<&Display>,
 ) -> Vec<IniEditView> {
     profile
         .ini
@@ -366,6 +414,7 @@ fn ini_edits(
                 file: ini.file.clone(),
                 section: ini.section.clone(),
                 key: ini.key.clone(),
+                resolved: launch::resolve_ini_value(&ini.value, display),
                 value: ini.value.clone(),
                 reason: ini.reason.clone(),
             }
@@ -444,6 +493,9 @@ fn render_dry_run(plan: &LaunchPlan, ini: &[IniEditView]) -> String {
             ));
         }
     }
+    if let Some(cap) = &plan.frame_cap {
+        out.push_str(&format!("Frame cap: {}\n", describe_frame_cap(cap)));
+    }
     if !ini.is_empty() {
         out.push_str("INI edits:\n");
         for edit in ini {
@@ -452,9 +504,14 @@ fn render_dry_run(plan: &LaunchPlan, ini: &[IniEditView]) -> String {
                 Some(path) => format!("{} (does not exist yet; skipped)", path.display()),
                 None => format!("{} (cannot be resolved; skipped)", edit.file),
             };
+            let value = match &edit.resolved {
+                Some(value) if *value == edit.value => value.clone(),
+                Some(value) => format!("{value} (from {})", edit.value),
+                None => format!("{} (unknown display; skipped)", edit.value),
+            };
             out.push_str(&format!(
-                "  [{}] {}={} in {location}\n",
-                edit.section, edit.key, edit.value
+                "  [{}] {}={value} in {location}\n",
+                edit.section, edit.key
             ));
         }
     }
@@ -464,6 +521,18 @@ fn render_dry_run(plan: &LaunchPlan, ini: &[IniEditView]) -> String {
     out.push_str("Command:\n");
     out.push_str(&format!("  {}\n", plan.command.to_shell()));
     out
+}
+
+/// `120 FPS (the main display's refresh rate (...))`, `none (...)`, or
+/// that `DXMT_CONFIG` from the environment layers replaces it.
+fn describe_frame_cap(cap: &FrameCap) -> String {
+    if cap.overridden {
+        return "set by DXMT_CONFIG from the bottle, the profile or --env".to_owned();
+    }
+    match cap.fps {
+        Some(fps) => format!("{fps} FPS, {}", cap.source),
+        None => format!("none, {}", cap.source),
+    }
 }
 
 fn describe_strategy(strategy: &Strategy) -> String {
@@ -622,16 +691,28 @@ mod tests {
             log: "/u/logs/b-game-1.log".into(),
             warnings: vec!["anti-cheat found".to_owned()],
             game_mode: None,
+            frame_cap: Some(FrameCap {
+                fps: Some(120),
+                source: "the main display's refresh rate (Color LCD 1728x1117 @120Hz)".to_owned(),
+                overridden: false,
+            }),
+            display: Some("Color LCD 1728x1117 @120Hz".to_owned()),
         };
-        let ini = vec![IniEditView {
+        let edit = |key: &str, value: &str, resolved: Option<&str>| IniEditView {
             file: r"%APPDATA%\G\g.ini".to_owned(),
             path: Some("/b/drive_c/users/me/AppData/Roaming/G/g.ini".into()),
             exists: false,
             section: "S".to_owned(),
-            key: "K".to_owned(),
-            value: "1".to_owned(),
+            key: key.to_owned(),
+            value: value.to_owned(),
+            resolved: resolved.map(str::to_owned),
             reason: String::new(),
-        }];
+        };
+        let ini = vec![
+            edit("K", "1", Some("1")),
+            edit("W", "{display.width}", Some("1728")),
+            edit("H", "{display.height}", None),
+        ];
         let text = render_dry_run(&plan, &ini);
         assert!(
             text.starts_with(
@@ -646,11 +727,46 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("[S] K=1 in /b/drive_c/users/me/AppData/Roaming/G/g.ini (does not exist yet; skipped)"), "{text}");
+        assert!(
+            text.contains("[S] W=1728 (from {display.width}) in /b/"),
+            "{text}"
+        );
+        assert!(
+            text.contains("[S] H={display.height} (unknown display; skipped) in /b/"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Frame cap: 120 FPS, the main display's refresh rate (Color LCD 1728x1117 @120Hz)\n"
+            ),
+            "{text}"
+        );
         assert!(text.contains("Log:     /u/logs/b-game-1.log\n"), "{text}");
         assert!(
             text.ends_with("  WINEPREFIX='/b' '/w/bin/wine' '/b/drive_c/Games/game.exe'\n"),
             "{text}"
         );
         assert_eq!(plan_program(&plan), "game.exe");
+    }
+
+    #[test]
+    fn frame_caps_say_where_they_come_from() {
+        let cap = |fps, overridden| FrameCap {
+            fps,
+            source: "performance.max_fps in bottle steam".to_owned(),
+            overridden,
+        };
+        assert_eq!(
+            describe_frame_cap(&cap(Some(60), false)),
+            "60 FPS, performance.max_fps in bottle steam"
+        );
+        assert_eq!(
+            describe_frame_cap(&cap(None, false)),
+            "none, performance.max_fps in bottle steam"
+        );
+        assert_eq!(
+            describe_frame_cap(&cap(Some(60), true)),
+            "set by DXMT_CONFIG from the bottle, the profile or --env"
+        );
     }
 }

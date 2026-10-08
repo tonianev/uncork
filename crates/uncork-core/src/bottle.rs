@@ -102,6 +102,12 @@ pub struct PerformanceConfig {
     /// Experimental; default off.
     #[serde(default)]
     pub game_mode: bool,
+    /// Frame-rate cap for games, in frames per second; `0` is uncapped.
+    /// `None` (the default) caps at the main display's refresh rate, or at
+    /// 60 when that is unknown. Applied by backends that can cap (DXMT,
+    /// through `DXMT_CONFIG`); see [`crate::launch::plan`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fps: Option<u32>,
 }
 
 fn yes() -> bool {
@@ -117,6 +123,7 @@ impl Default for PerformanceConfig {
             metalfx: false,
             avx: true,
             game_mode: false,
+            max_fps: None,
         }
     }
 }
@@ -183,6 +190,14 @@ pub struct BottleState {
     /// Wine version that last initialized or updated the prefix.
     #[serde(default)]
     pub prefix_wine: Option<String>,
+    /// The main display ([`crate::display::Display::signature`]) when Uncork
+    /// last started the first Wine process of a session in this bottle (the
+    /// Steam client, or a launch while no wineserver ran). `None` when it
+    /// was unknown. Wine reads the displays when its wineserver starts, so a
+    /// running bottle whose main display has changed since is restarted
+    /// before a game starts ([`crate::steam::display_change`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_display: Option<String>,
 }
 
 fn one() -> u32 {
@@ -197,6 +212,7 @@ impl Default for BottleState {
             schema: one(),
             active: None,
             prefix_wine: None,
+            session_display: None,
         }
     }
 }
@@ -302,6 +318,20 @@ impl Bottle {
     /// [`crate::Error::Io`].
     pub fn save_state(&self) -> crate::Result<()> {
         write_toml_atomic(&self.path.join(STATE_FILE), &self.state)
+    }
+
+    /// Record `signature` as the main display of the session that is
+    /// starting ([`BottleState::session_display`]) and save the state. A
+    /// failure to save is logged, not returned: it only costs a restart
+    /// that may not be needed later.
+    pub fn record_session_display(&mut self, signature: Option<&str>) {
+        self.state.session_display = signature.map(str::to_owned);
+        if let Err(err) = self.save_state() {
+            tracing::warn!(
+                "cannot record the main display for bottle {}: {err}",
+                self.config.name
+            );
+        }
     }
 }
 
@@ -1210,6 +1240,7 @@ mod tests {
                 metalfx: true,
                 avx: false,
                 game_mode: true,
+                max_fps: Some(60),
             },
             env: BTreeMap::from([("DXMT_LOG_LEVEL".to_owned(), "info".to_owned())]),
             dll_overrides: BTreeMap::from([("d3dcompiler_47".to_owned(), "n,b".to_owned())]),
@@ -1263,6 +1294,7 @@ mod tests {
                 }],
             }),
             prefix_wine: Some("11.0".to_owned()),
+            session_display: Some("Color LCD 1728x1117 @120Hz".to_owned()),
         };
         let text = toml::to_string(&state).unwrap();
         assert_eq!(
@@ -1445,6 +1477,40 @@ mod tests {
                 log_pixels: Some(96)
             })
         );
+    }
+
+    #[test]
+    fn the_session_display_is_saved_with_the_state() {
+        let (_dir, layout) = home();
+        let mut bottle = Bottle {
+            path: layout.bottle_dir("steam"),
+            config: config("steam"),
+            state: BottleState::default(),
+        };
+        mkdirs(&bottle.path);
+        bottle.save_config().unwrap();
+        bottle.record_session_display(Some("Color LCD 1728x1117 @120Hz"));
+        assert_eq!(
+            Bottle::open(&bottle.path)
+                .unwrap()
+                .state
+                .session_display
+                .as_deref(),
+            Some("Color LCD 1728x1117 @120Hz")
+        );
+        bottle.record_session_display(None);
+        assert_eq!(
+            Bottle::open(&bottle.path).unwrap().state.session_display,
+            None
+        );
+
+        // Recording into a bottle whose directory is gone only logs.
+        let mut gone = Bottle {
+            path: layout.bottle_dir("gone"),
+            ..bottle.clone()
+        };
+        gone.record_session_display(Some("x"));
+        assert_eq!(gone.state.session_display.as_deref(), Some("x"));
     }
 
     #[test]

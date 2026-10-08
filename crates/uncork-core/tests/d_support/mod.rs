@@ -261,6 +261,7 @@ pub fn ctx<'a>(
         wine: &fx.wine,
         components,
         profile,
+        display: None,
     }
 }
 

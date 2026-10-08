@@ -322,11 +322,18 @@ fn a_wine_client_that_exits_1_without_regs_message_is_an_error() {
 #[test]
 fn ensure_running_leaves_a_running_client_alone() {
     let fx = Fixture::new(CX_FEATURES);
-    let bottle = fx.bottle("steam", |_| {});
+    let mut bottle = fx.bottle("steam", |_| {});
     fx.install_steam(&bottle);
     fx.dxvk("1.10.3");
     fx.steam_running();
-    ensure_running(&fx.layout, &bottle, &fx.wine, Duration::from_secs(60)).unwrap();
+    ensure_running(
+        &fx.layout,
+        &mut bottle,
+        &fx.wine,
+        None,
+        Duration::from_secs(60),
+    )
+    .unwrap();
     assert_eq!(
         fx.calls().len(),
         2,
@@ -342,14 +349,20 @@ fn ensure_running_leaves_a_running_client_alone() {
 #[test]
 fn ensure_running_starts_the_client_and_gives_up_after_the_timeout() {
     let fx = Fixture::new(CX_FEATURES);
-    let bottle = fx.bottle("steam", |_| {});
+    let mut bottle = fx.bottle("steam", |_| {});
     let root = fx.install_steam(&bottle);
     fx.dxvk("1.10.3");
     fx.flag("steam-hangs");
 
     let started = std::time::Instant::now();
-    let err =
-        ensure_running(&fx.layout, &bottle, &fx.wine, Duration::from_millis(100)).unwrap_err();
+    let err = ensure_running(
+        &fx.layout,
+        &mut bottle,
+        &fx.wine,
+        None,
+        Duration::from_millis(100),
+    )
+    .unwrap_err();
     assert!(
         started.elapsed() < Duration::from_secs(1),
         "{:?}",
@@ -390,10 +403,10 @@ fn ensure_running_starts_the_client_and_gives_up_after_the_timeout() {
 #[test]
 fn ensure_running_without_dxvk_still_starts_the_client() {
     let fx = Fixture::new(CX_FEATURES);
-    let bottle = fx.bottle("steam", |_| {});
+    let mut bottle = fx.bottle("steam", |_| {});
     fx.install_steam(&bottle);
     fx.flag("steam-hangs");
-    let err = ensure_running(&fx.layout, &bottle, &fx.wine, Duration::ZERO).unwrap_err();
+    let err = ensure_running(&fx.layout, &mut bottle, &fx.wine, None, Duration::ZERO).unwrap_err();
     assert!(matches!(err, Error::Command { .. }), "{err:?}");
     // The client was spawned, not waited for: give it a moment to log.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -411,8 +424,8 @@ fn ensure_running_without_dxvk_still_starts_the_client() {
 #[test]
 fn ensure_running_needs_steam() {
     let fx = Fixture::new(CX_FEATURES);
-    let bottle = fx.bottle("steam", |_| {});
-    let err = ensure_running(&fx.layout, &bottle, &fx.wine, Duration::ZERO).unwrap_err();
+    let mut bottle = fx.bottle("steam", |_| {});
+    let err = ensure_running(&fx.layout, &mut bottle, &fx.wine, None, Duration::ZERO).unwrap_err();
     assert!(
         matches!(
             err,
@@ -689,6 +702,7 @@ fn a_dry_run_touches_nothing() {
         &fx.wine,
         &components,
         Some(&ron),
+        None,
         APPID,
         &[],
         &LaunchOptions::default(),
@@ -731,6 +745,7 @@ fn standalone_games_start_without_steam() {
         &fx.wine,
         &components,
         Some(&ron),
+        None,
         APPID,
         &["-window".to_owned()],
         &LaunchOptions::default(),
@@ -746,14 +761,19 @@ fn standalone_games_start_without_steam() {
         "[RISE OF NATIONS]\nSkipIntroMovies=1\n"
     );
     let calls = fx.calls();
-    assert_eq!(calls.len(), 1, "{calls:#?}");
+    assert_eq!(calls.len(), 2, "{calls:#?}");
     assert!(
-        calls[0].starts_with(&format!(
+        calls[0].starts_with("wineserver -k0"),
+        "is a session starting? {}",
+        calls[0]
+    );
+    assert!(
+        calls[1].starts_with(&format!(
             "wine {} -nointro -window |",
             dir.join("riseofnations.exe").display()
         )),
         "{}",
-        calls[0]
+        calls[1]
     );
     assert!(
         bottle
@@ -778,6 +798,7 @@ fn direct_games_reuse_a_running_client() {
         &fx.wine,
         &components,
         None,
+        None,
         APPID,
         &[],
         &LaunchOptions::default(),
@@ -788,20 +809,21 @@ fn direct_games_reuse_a_running_client() {
     assert!(outcome.child.take().unwrap().wait().unwrap().success());
     assert!(!outcome.started_steam);
     let calls = fx.calls();
-    assert_eq!(calls.len(), 3, "{calls:#?}");
+    assert_eq!(calls.len(), 4, "{calls:#?}");
     assert!(calls[0].starts_with("wineserver -k0"), "{}", calls[0]);
     assert!(calls[1].starts_with("wine reg query"), "{}", calls[1]);
+    assert!(calls[2].starts_with("wineserver -k0"), "{}", calls[2]);
     assert!(
-        calls[2].starts_with(&format!(
+        calls[3].starts_with(&format!(
             "wine {} |",
             dir.join("riseofnations.exe").display()
         )),
         "{}",
-        calls[2]
+        calls[3]
     );
     assert!(
-        calls[2].contains(" DXMT_LOG_LEVEL=none "),
+        calls[3].contains(" DXMT_LOG_LEVEL=none "),
         "auto picked DXMT: {}",
-        calls[2]
+        calls[3]
     );
 }

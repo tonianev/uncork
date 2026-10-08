@@ -294,13 +294,18 @@ fn render_info(view: &BottleInfoView<'_>) -> String {
         (
             "Performance",
             format!(
-                "msync {}, retina {}, hud {}, metalfx {}, avx {}, game_mode {}",
+                "msync {}, retina {}, hud {}, metalfx {}, avx {}, game_mode {}, max_fps {}",
                 on_off(performance.msync),
                 on_off(performance.retina),
                 on_off(performance.hud),
                 on_off(performance.metalfx),
                 on_off(performance.avx),
-                on_off(performance.game_mode)
+                on_off(performance.game_mode),
+                match performance.max_fps {
+                    None => "display".to_owned(),
+                    Some(0) => "uncapped".to_owned(),
+                    Some(fps) => fps.to_string(),
+                }
             ),
         ),
         ("Environment", list(&config.env)),
@@ -337,6 +342,7 @@ const SETTABLE_KEYS: &[&str] = &[
     "performance.metalfx",
     "performance.avx",
     "performance.game_mode",
+    "performance.max_fps",
     "env.<NAME>",
     "dll_overrides.<dll>",
 ];
@@ -520,6 +526,14 @@ fn apply_setting(
                 None => format!("{key} unpinned (newest installed)"),
             });
         }
+        "performance.max_fps" => {
+            config.performance.max_fps = parse_max_fps(value)?;
+            return Ok(match config.performance.max_fps {
+                None => format!("{key} unset (the main display's refresh rate)"),
+                Some(0) => format!("{key} = 0 (uncapped)"),
+                Some(fps) => format!("{key} = {fps}"),
+            });
+        }
         _ => {
             let Some(switch) = key.strip_prefix("performance.") else {
                 return Err(unknown_key(key));
@@ -547,6 +561,20 @@ fn unknown_key(key: &str) -> anyhow::Error {
         "unknown setting {key:?}; valid keys: {}",
         SETTABLE_KEYS.join(", ")
     )
+}
+
+/// A frame cap: a number of frames per second, `0` for uncapped, or an
+/// empty value (or `auto`) for the default, the main display's refresh rate.
+fn parse_max_fps(value: &str) -> anyhow::Result<Option<u32>> {
+    if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+        return Ok(None);
+    }
+    match value.parse::<u32>() {
+        Ok(fps) if fps <= 1000 => Ok(Some(fps)),
+        _ => bail!(
+            "{value:?} is not a frame cap; use frames per second (for example 60 or 120), 0 for uncapped, or an empty value for the main display's refresh rate"
+        ),
+    }
 }
 
 /// `true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0` (any case).
@@ -846,6 +874,8 @@ fn open_tool(ctx: &Ctx, name: &str, tool: &str) -> anyhow::Result<ExitCode> {
             args: Vec::new(),
         }
     };
+    // The tool may start the bottle's Wine session; record its display.
+    let display = uncork_core::display::probe_main();
     let plan = launch::plan(
         PlanContext {
             layout: &ctx.layout,
@@ -853,6 +883,7 @@ fn open_tool(ctx: &Ctx, name: &str, tool: &str) -> anyhow::Result<ExitCode> {
             wine: &wine,
             components: &components,
             profile: None,
+            display: display.as_ref(),
         },
         &target,
         &LaunchOptions::default(),

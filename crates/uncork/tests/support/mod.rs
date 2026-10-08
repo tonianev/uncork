@@ -14,6 +14,19 @@ use assert_cmd::Command;
 /// Version of the fake Wine component [`Home::install_fake_wine`] installs.
 pub const FAKE_WINE: &str = "fake-1";
 
+/// `system_profiler SPDisplaysDataType -json` output with only a 16-inch
+/// `MacBook` Pro's built-in display (1728x1117 points, 120 Hz), the main
+/// display every CLI test sees unless it calls [`Home::set_displays`].
+pub const BUILT_IN_DISPLAY: &str = r#"{"SPDisplaysDataType":[{"_name":"Apple M5 Max","spdisplays_ndrvs":[{
+  "_name":"Color LCD","_spdisplays_pixels":"3456 x 2234","_spdisplays_resolution":"1728 x 1117 @ 120.00Hz",
+  "spdisplays_connection_type":"spdisplays_internal","spdisplays_main":"spdisplays_yes"}]}]}"#;
+
+/// A 5K external display at 60 Hz as the main display, next to the
+/// built-in one.
+pub const EXTERNAL_5K_DISPLAY: &str = r#"{"SPDisplaysDataType":[{"_name":"Apple M5 Max","spdisplays_ndrvs":[
+ {"_name":"Color LCD","_spdisplays_resolution":"1728 x 1117 @ 120.00Hz","spdisplays_connection_type":"spdisplays_internal"},
+ {"_name":"LG UltraFine","_spdisplays_pixels":"5120 x 2880","_spdisplays_resolution":"2560 x 1440 @ 60.00Hz","spdisplays_main":"spdisplays_yes"}]}]}"#;
+
 /// A temporary directory holding an Uncork data root and a home directory.
 pub struct Home {
     dir: tempfile::TempDir,
@@ -29,12 +42,19 @@ impl Home {
     pub fn new() -> Home {
         let dir = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(dir.path().join("home")).unwrap();
-        Home { dir }
+        let home = Home { dir };
+        home.set_displays(BUILT_IN_DISPLAY);
+        home
     }
 
-    /// The temporary directory (for test files outside the data root).
-    pub fn path(&self) -> &Path {
-        self.dir.path()
+    /// The displays `uncork` sees from now on, as `system_profiler` JSON
+    /// (the file `UNCORK_DISPLAYS_JSON` names).
+    pub fn set_displays(&self, json: &str) {
+        fs::write(self.displays_file(), json).unwrap();
+    }
+
+    fn displays_file(&self) -> PathBuf {
+        self.path().join("displays.json")
     }
 
     /// The marker file of the fake wineserver: present while one "runs".
@@ -45,6 +65,11 @@ impl Home {
     /// Make the fake Wine act as if a wineserver ran for every prefix.
     pub fn start_fake_wineserver(&self) {
         fs::write(self.server_file(), "").unwrap();
+    }
+
+    /// The temporary directory (for test files outside the data root).
+    pub fn path(&self) -> &Path {
+        self.dir.path()
     }
 
     /// The data root, `UNCORK_HOME`.
@@ -58,13 +83,15 @@ impl Home {
     }
 
     /// The `uncork` binary with `UNCORK_HOME`, `HOME` and `USER` pointing at
-    /// test values and `RUST_LOG` removed.
+    /// test values, the displays from [`Home::set_displays`] and `RUST_LOG`
+    /// removed.
     pub fn uncork(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_uncork"));
         cmd.env("UNCORK_HOME", self.root())
             .env("HOME", self.path().join("home"))
             .env("USER", "tester")
             .env("LOGNAME", "tester")
+            .env("UNCORK_DISPLAYS_JSON", self.displays_file())
             .env_remove("RUST_LOG");
         cmd
     }

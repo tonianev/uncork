@@ -7,6 +7,7 @@ use std::process::{Child, ExitCode};
 use anyhow::{Context as _, anyhow};
 use serde::Serialize;
 use uncork_core::bottle::Bottle;
+use uncork_core::display::Display;
 use uncork_core::process::CommandSpec;
 use uncork_core::wine::WineRuntime;
 use uncork_steam::SteamInstall;
@@ -50,14 +51,14 @@ fn install(ctx: &Ctx, bottle: Option<&str>, yes: bool) -> anyhow::Result<ExitCod
             yes,
         )?;
     }
-    install_and_start(ctx, &bottle, &wine)
+    install_and_start(ctx, &mut bottle, &wine)
 }
 
 /// Install Steam into `bottle` (skipped when it is there) and start the
 /// client in the foreground so the user can sign in.
 pub(super) fn install_and_start(
     ctx: &Ctx,
-    bottle: &Bottle,
+    bottle: &mut Bottle,
     wine: &WineRuntime,
 ) -> anyhow::Result<ExitCode> {
     if SteamInstall::find(bottle.prefix()).is_some() {
@@ -107,24 +108,30 @@ fn steam_missing(bottle: &Bottle) -> anyhow::Error {
 
 /// Start the Steam client with its window visible (not `-silent`), after
 /// putting the bottle's DXVK (its `graphics.dxvk` pin, else the newest)
-/// next to its web helper. Does nothing when it already runs.
+/// next to its web helper. Does nothing when it already runs. When no
+/// wineserver ran, the client starts a new Wine session and the main
+/// display is recorded as the session's.
 fn start_client(
     ctx: &Ctx,
-    bottle: &Bottle,
+    bottle: &mut Bottle,
     wine: &WineRuntime,
     env: &BTreeMap<String, String>,
     wine_debug: Option<&str>,
 ) -> anyhow::Result<Option<Child>> {
-    let name = &bottle.config.name;
+    let name = bottle.config.name.clone();
     let install = SteamInstall::find(bottle.prefix()).ok_or_else(|| steam_missing(bottle))?;
-    if uncork_core::steam::is_running(bottle, wine)
-        .context("cannot tell whether Steam is running")?
-    {
+    let status = uncork_core::steam::client_status(bottle, wine)
+        .context("cannot tell whether Steam is running")?;
+    if status.running {
         println!("Steam is already running in bottle {name}.");
         return Ok(None);
     }
     if let Some(warning) = uncork_core::steam::prepare_client_dxvk(&ctx.layout, bottle, &install)? {
         eprintln!("warning: {warning}");
+    }
+    if !status.server {
+        let display = uncork_core::display::probe_main();
+        bottle.record_session_display(display.as_ref().map(Display::signature).as_deref());
     }
     let spec = client_spec(bottle, wine, env, wine_debug)?;
     let child = uncork_core::process::spawn(&spec).context("cannot start Steam")?;
@@ -142,7 +149,7 @@ fn start(ctx: &Ctx, flags: &LaunchFlags) -> anyhow::Result<ExitCode> {
             "note: --backend, --hud, --metalfx and --retina apply to games; the Steam client always runs on DXVK"
         );
     }
-    let bottle = ctx.open_bottle(flags.bottle.as_deref())?;
+    let mut bottle = ctx.open_bottle(flags.bottle.as_deref())?;
     let wine = bottle_wine(&ctx.layout, &bottle)?;
     if flags.dry_run {
         if SteamInstall::find(bottle.prefix()).is_none() {
@@ -161,7 +168,7 @@ fn start(ctx: &Ctx, flags: &LaunchFlags) -> anyhow::Result<ExitCode> {
     }
     let child = start_client(
         ctx,
-        &bottle,
+        &mut bottle,
         &wine,
         &options.env,
         options.wine_debug.as_deref(),

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use common::PeBuilder;
 use predicates::prelude::*;
 use predicates::str::contains;
-use support::{FAKE_WINE, Home, write_script};
+use support::{EXTERNAL_5K_DISPLAY, FAKE_WINE, Home, write_script};
 use uncork_core::process::CommandSpec;
 
 /// A 32-bit D3D11 game inside the bottle's `drive_c/Games/Test`.
@@ -211,10 +211,130 @@ fn play_dry_run_shows_backend_ini_and_command() {
     assert!(text.contains("WINE_LARGE_ADDRESS_AWARE='1'"), "{text}");
     assert!(text.contains("riseofnations.exe"), "{text}");
 
+    assert!(
+        text.contains(
+            "Frame cap: 120 FPS, the main display's refresh rate (Color LCD 1728x1117 @120Hz)\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("DXMT_CONFIG='d3d11.preferredMaxFrameRate=120'"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[RISE OF NATIONS] Fullscreen=2 in "),
+        "{text}"
+    );
+    assert!(
+        text.contains("[RISE OF NATIONS] Windowed Width=1728 (from {display.width}) in "),
+        "{text}"
+    );
+    assert!(
+        text.contains("[RISE OF NATIONS] Windowed Height=1117 (from {display.height}) in "),
+        "{text}"
+    );
+
     let by_appid = home.stdout(&["play", "287450", "--dry-run"]);
     assert!(by_appid.starts_with("Backend: dxmt"), "{by_appid}");
     let launched = home.stdout(&["steam", "launch", "287450", "--dry-run"]);
     assert!(launched.starts_with("Backend: dxmt"), "{launched}");
+
+    // A 5K display at 60 Hz as the main display.
+    home.set_displays(EXTERNAL_5K_DISPLAY);
+    let text = home.stdout(&["play", "rise", "--dry-run"]);
+    assert!(
+        text.contains(
+            "Frame cap: 60 FPS, the main display's refresh rate (LG UltraFine 2560x1440 @60Hz)"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("Windowed Width=2560 (from "), "{text}");
+    assert!(text.contains("Windowed Height=1440 (from "), "{text}");
+    let plan = home.json(&["play", "rise", "--dry-run"]);
+    assert_eq!(plan["plan"]["frame_cap"]["fps"], 60);
+    assert_eq!(plan["plan"]["display"], "LG UltraFine 2560x1440 @60Hz");
+    let width = plan["ini"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|edit| edit["key"] == "Windowed Width")
+        .unwrap();
+    assert_eq!(width["value"], "{display.width}");
+    assert_eq!(width["resolved"], "2560");
+
+    // No display information: the keys that need it are skipped.
+    home.set_displays("not json");
+    let text = home.stdout(&["play", "rise", "--dry-run"]);
+    assert!(
+        text.contains("Windowed Width={display.width} (unknown display; skipped) in "),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "Frame cap: 60 FPS, the default (the main display's refresh rate is unknown)"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("warning: the main display is unknown"),
+        "{text}"
+    );
+}
+
+#[test]
+fn run_restarts_a_bottle_whose_main_display_changed() {
+    let home = home_with_bottle();
+    let exe = game_in_bottle(&home, "test1");
+    let state = home.bottle("test1").join("uncork-state.toml");
+
+    // The first launch starts the session on the built-in display.
+    home.uncork()
+        .args(["run", "-b", "test1", "--backend", "wined3d"])
+        .arg(&exe)
+        .assert()
+        .success()
+        .stderr(contains("main display changed").not());
+    let recorded = fs::read_to_string(&state).unwrap();
+    assert!(
+        recorded.contains("session_display = \"Color LCD 1728x1117 @120Hz\""),
+        "{recorded}"
+    );
+
+    // The bottle still runs when a 5K display becomes the main one.
+    home.start_fake_wineserver();
+    home.set_displays(EXTERNAL_5K_DISPLAY);
+    let kills = |home: &Home| {
+        home.calls()
+            .iter()
+            .filter(|call| call.starts_with("wineserver --kill"))
+            .count()
+    };
+    let before = kills(&home);
+    home.uncork()
+        .args(["run", "-b", "test1", "--backend", "wined3d"])
+        .arg(&exe)
+        .assert()
+        .success()
+        .stderr(contains(
+            "The main display changed since bottle test1 started (Color LCD 1728x1117 @120Hz → LG UltraFine 2560x1440 @60Hz); restarting the bottle so the program sees the new display",
+        ));
+    assert_eq!(kills(&home), before + 1);
+    let recorded = fs::read_to_string(&state).unwrap();
+    assert!(
+        recorded.contains("session_display = \"LG UltraFine 2560x1440 @60Hz\""),
+        "{recorded}"
+    );
+
+    // An unreadable display list never restarts anything.
+    home.start_fake_wineserver();
+    home.set_displays("");
+    home.uncork()
+        .args(["run", "-b", "test1", "--backend", "wined3d"])
+        .arg(&exe)
+        .assert()
+        .success()
+        .stderr(contains("main display changed").not());
+    assert_eq!(kills(&home), before + 1);
 }
 
 #[test]

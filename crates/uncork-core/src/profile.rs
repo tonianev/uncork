@@ -101,6 +101,10 @@ pub struct ProfilePerformance {
     /// Advertise AVX through Rosetta.
     #[serde(default)]
     pub avx: Option<bool>,
+    /// Frame-rate cap in frames per second, `0` for uncapped; see
+    /// [`crate::bottle::PerformanceConfig::max_fps`].
+    #[serde(default)]
+    pub max_fps: Option<u32>,
 }
 
 /// How to start the game.
@@ -123,6 +127,9 @@ pub struct ProfileLaunch {
 /// for the prefix's user: the one directory under `drive_c/users` other than
 /// `Public`), or `%INSTALLDIR%\...` (the game's install directory). `/` and
 /// `\` are both accepted.
+///
+/// `value` may contain the placeholders in [`INI_PLACEHOLDERS`], resolved
+/// at launch from the main display ([`crate::launch::resolve_ini_value`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileIni {
@@ -132,7 +139,7 @@ pub struct ProfileIni {
     pub section: String,
     /// Key.
     pub key: String,
-    /// Value.
+    /// Value; may contain [`INI_PLACEHOLDERS`].
     pub value: String,
     /// Why (shown by `uncork profile show`).
     #[serde(default)]
@@ -254,8 +261,9 @@ impl GameProfile {
     /// repeated in `fallbacks`; a backend that cannot run the declared
     /// `bitness`+`api` ([`crate::graphics::supports`]); DXVK listed while
     /// `geometry_shaders` is true; `mode = "direct"`/`"applaunch"` without
-    /// `[steam]`; an `ini.file` without a known `%BASE%` prefix or with `..`.
-    /// Empty when valid.
+    /// `[steam]`; an `ini.file` without a known `%BASE%` prefix or with `..`;
+    /// an `ini.value` with a `{...}` token that is not one of
+    /// [`INI_PLACEHOLDERS`]. Empty when valid.
     #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
@@ -298,6 +306,17 @@ impl GameProfile {
         for ini in &self.ini {
             if let Some(why) = ini_file_problem(&ini.file) {
                 problems.push(format!("ini.file {:?} {why}", ini.file));
+            }
+            for token in placeholders(&ini.value) {
+                if !INI_PLACEHOLDERS.contains(&token) {
+                    problems.push(format!(
+                        "ini.value {:?} has an unknown placeholder {{{token}}}; known: {}",
+                        ini.value,
+                        INI_PLACEHOLDERS
+                            .map(|known| format!("{{{known}}}"))
+                            .join(", ")
+                    ));
+                }
             }
         }
         problems
@@ -371,6 +390,26 @@ const INI_BASES: [&str; 4] = [
     "%USERPROFILE%",
     "%INSTALLDIR%",
 ];
+
+/// The placeholders an `[[ini]]` value may contain, without their braces:
+/// the main display's "looks like" width and height in points and its
+/// refresh rate in whole Hz ([`crate::launch::resolve_ini_value`]).
+pub const INI_PLACEHOLDERS: [&str; 3] = ["display.width", "display.height", "display.refresh"];
+
+/// The `{...}` tokens of `value`, without braces (a `{` with no `}` after
+/// it is plain text).
+fn placeholders(value: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut rest = value;
+    while let Some(start) = rest.find('{') {
+        let Some(len) = rest[start..].find('}') else {
+            break;
+        };
+        tokens.push(&rest[start + 1..start + len]);
+        rest = &rest[start + len + 1..];
+    }
+    tokens
+}
 
 /// `^[a-z0-9]+(-[a-z0-9]+)*$`, at most [`MAX_ID_LEN`] characters.
 fn is_kebab_id(id: &str) -> bool {
@@ -684,6 +723,7 @@ windows_version = "win11"
 msync = false
 [performance]
 retina = true
+max_fps = 60
 [env]
 A_B = "1"
 [dll_overrides]
@@ -712,6 +752,7 @@ status = "playable"
         assert_eq!(profile.graphics.backend, Some(Backend::D3dmetal));
         assert_eq!(profile.wine.windows_version, Some(WindowsVersion::Win11));
         assert_eq!(profile.launch_mode(), LaunchMode::Applaunch);
+        assert_eq!(profile.performance.max_fps, Some(60));
         assert_eq!(profile.compat.reports.len(), 1);
         assert!(profile.problems().is_empty(), "{:?}", profile.problems());
     }
@@ -980,6 +1021,34 @@ status = "playable"
         ] {
             assert_one_problem(|p| p.ini.push(ini(file)), why);
         }
+    }
+
+    #[test]
+    fn ini_values_may_hold_only_known_placeholders() {
+        let with_value = |value: &str| {
+            let mut entry = ini(r"%APPDATA%\Game\game.ini");
+            entry.value = value.to_owned();
+            problems_after(|p| p.ini.push(entry))
+        };
+        for value in [
+            "{display.width}",
+            "{display.height}",
+            "{display.refresh}",
+            "{display.width}x{display.height}",
+            "plain",
+            "{ not a token",
+            "",
+        ] {
+            assert_eq!(with_value(value), Vec::<String>::new(), "{value}");
+        }
+        assert_eq!(
+            with_value("{display.depth}"),
+            [
+                "ini.value \"{display.depth}\" has an unknown placeholder {display.depth}; known: {display.width}, {display.height}, {display.refresh}"
+            ]
+        );
+        assert_eq!(with_value("{}x{DISPLAY.WIDTH}").len(), 2);
+        assert_eq!(placeholders("a{b}c{d"), ["b"]);
     }
 
     #[test]

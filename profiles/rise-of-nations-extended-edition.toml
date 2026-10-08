@@ -43,6 +43,42 @@ key = "SkipIntroMovies"
 value = "1"
 reason = "The intro videos are WMV through DirectShow; without GStreamer WMV decoders they stall the game under Wine."
 
+# Fullscreen is an enum: 0 windowed, 1 exclusive full screen, 2 borderless
+# window, 3 borderless while starting (the game turns 1 into 3 at startup
+# and back only on the intro-video path, so with SkipIntroMovies=1 it stays 3).
+[[ini]]
+file = '%APPDATA%\Microsoft Games\Rise of Nations\rise2.ini'
+section = "RISE OF NATIONS"
+key = "Fullscreen"
+value = "2"
+reason = "A borderless window at the desktop size. Exclusive full screen (1) switches the Mac's display mode and is unreliable under Wine; 3 is a state the game uses while it starts."
+
+# Windowed Width/Height hold the resolution in every mode. It must be a mode
+# Wine reports, or the game replaces it (with 1024x768 or an odd size). The
+# main display's "looks like" size is one, and the game always uses the main
+# display. The game's UI does not scale, so the native pixel size would make
+# the HUD half as big.
+[[ini]]
+file = '%APPDATA%\Microsoft Games\Rise of Nations\rise2.ini'
+section = "RISE OF NATIONS"
+key = "Windowed Width"
+value = "{display.width}"
+reason = "The main display's width in points: a mode Wine reports, so the game keeps it, and the size the borderless window covers."
+
+[[ini]]
+file = '%APPDATA%\Microsoft Games\Rise of Nations\rise2.ini'
+section = "RISE OF NATIONS"
+key = "Windowed Height"
+value = "{display.height}"
+reason = "The main display's height in points (see Windowed Width)."
+
+[[ini]]
+file = '%APPDATA%\Microsoft Games\Rise of Nations\rise2.ini'
+section = "RISE OF NATIONS"
+key = "IgnoreMinimizeOnTabOut"
+value = "1"
+reason = "Keeps Command-Tab from minimizing the borderless window."
+
 [compat]
 status = "untested"
-notes = "Needs the Steam client running in the same bottle; uncork play starts it. Play windowed for now (Fullscreen=0 under [RISE OF NATIONS] in rise2.ini): full screen rendered cropped and offset on a 5K external display with Retina mode off. Leave Game Mode off: started through a Game Mode bundle the game crashed at startup in 3 of 5 launches, never when started directly. 2026-10-07 (M5 Max, macOS 27.0.1, winecx-gptk-4.7.3, DXMT 0.80): uncork play started Steam and then the game on DXMT; in a run by hand with the same DLLs and overrides, the main menu rendered windowed at 120 FPS (display cap), GPU 0.48 ms per frame. Not tested yet: a match, audio, videos, multiplayer lobbies (PlayFab over WinHTTP), alt-tab, full screen on other displays. Wine reports no General MIDI DLS collection, so DirectMusic music may be silent."
+notes = "Needs the Steam client running in the same bottle; uncork play starts it. The profile runs the game as a borderless window at the main display's \"looks like\" size (Fullscreen=2, Windowed Width and Height from the display). Retina mode and the DPI must agree: Uncork writes 96 DPI without Retina mode and 192 with it, and uncork doctor reports a bottle where they disagree (with CrossOver's 192 DPI and Retina mode off, the game saw a half-size screen: full screen cropped and offset, and crashes in d3dgl.dll). 2026-10-08 (M5 Max, macOS 27.0.1, built-in display 1728x1117 at 120 Hz, winecx-gptk-4.7.3, DXMT 0.80), each launch in a fresh Wine session: with Retina mode on and 192 DPI, 3 of 3 direct and 3 of 3 Game Mode bundle launches, and with Retina mode off and 96 DPI, 2 of 2 launches, started without a crash and showed the whole picture in a borderless 1728x1117 window at (0,0); the main menu ran at about 113 to 118 FPS with the Metal HUD. Game Mode bundles crashed the game at startup in 3 of 5 launches on 2026-10-07 and stay experimental and off by default. Not tested yet: a 5K external display with this profile, a match, audio, videos, multiplayer lobbies (PlayFab over WinHTTP), and what the camera notch hides at the top centre during a match. Wine reports no General MIDI DLS collection, so DirectMusic music may be silent."

@@ -636,6 +636,9 @@ pub struct BackendOptions {
     /// Keep backend logging on (`DXMT_LOG_LEVEL=info`, `DXVK_LOG_LEVEL=info`)
     /// instead of `none`.
     pub debug_logs: bool,
+    /// Frame-rate cap: `DXMT_CONFIG=d3d11.preferredMaxFrameRate=<n>` (DXMT;
+    /// other backends ignore it). `None` is uncapped.
+    pub max_fps: Option<u32>,
 }
 
 /// Build the activation for `backend` in `bottle`.
@@ -643,7 +646,10 @@ pub struct BackendOptions {
 /// Environment per backend (always, unless noted):
 ///
 /// - DXMT: `DXMT_LOG_LEVEL=none`, `DXMT_SHADER_CACHE_PATH=<bottle>/cache/dxmt`,
-///   plus `DXMT_METALFX_SPATIAL_SWAPCHAIN=1` with MetalFX. `winemetal.dll`
+///   plus `DXMT_METALFX_SPATIAL_SWAPCHAIN=1` with MetalFX and
+///   `DXMT_CONFIG=d3d11.preferredMaxFrameRate=<n>` with a frame cap
+///   (DXMT paces frames itself and needs `n` to divide the display's
+///   refresh rate). `winemetal.dll`
 ///   copies into `system32` (from `x86_64-windows`) and `syswow64` (from
 ///   `i386-windows`).
 /// - DXVK: `DXVK_LOG_LEVEL=none`, `DXVK_ASYNC=1`,
@@ -789,6 +795,9 @@ fn backend_env(
             set("DXMT_SHADER_CACHE_PATH", cache_dir("dxmt"));
             if options.metalfx {
                 set("DXMT_METALFX_SPATIAL_SWAPCHAIN", "1".to_owned());
+            }
+            if let Some(fps) = options.max_fps {
+                set("DXMT_CONFIG", format!("d3d11.preferredMaxFrameRate={fps}"));
             }
         }
         Backend::Dxvk => {
@@ -2351,6 +2360,7 @@ mod tests {
             metalfx: true,
             hud: true,
             debug_logs: true,
+            max_fps: Some(120),
         };
         let env = |backend, component| {
             activation(backend, component, &runtime, &f.bottle, all_on)
@@ -2362,6 +2372,7 @@ mod tests {
         assert_eq!(dxmt_env["DXMT_METALFX_SPATIAL_SWAPCHAIN"], "1");
         assert_eq!(dxmt_env["DXMT_LOG_LEVEL"], "info");
         assert_eq!(dxmt_env["MTL_HUD_ENABLED"], "1");
+        assert_eq!(dxmt_env["DXMT_CONFIG"], "d3d11.preferredMaxFrameRate=120");
 
         let dxvk_env = env(Dxvk, Some(&dxvk));
         assert_eq!(dxvk_env["DXVK_LOG_LEVEL"], "info");
@@ -2375,6 +2386,28 @@ mod tests {
         let wined3d_env = env(Wined3d, None);
         assert_eq!(wined3d_env["MTL_HUD_ENABLED"], "1");
         assert!(!wined3d_env.keys().any(|key| key.contains("METALFX")));
+        for other in [dxvk_env, gptk_env, wined3d_env] {
+            assert!(!other.contains_key("DXMT_CONFIG"), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn dxmt_without_a_cap_gets_no_config() {
+        let f = fixture();
+        let dxmt = component(&f.root, ComponentKind::Dxmt, DXMT_FILES);
+        let env = activation(
+            Dxmt,
+            Some(&dxmt),
+            &wine(&["renderer-dllpath"]),
+            &f.bottle,
+            BackendOptions {
+                max_fps: None,
+                ..BackendOptions::default()
+            },
+        )
+        .unwrap()
+        .env;
+        assert!(!env.contains_key("DXMT_CONFIG"), "{env:?}");
     }
 
     #[test]

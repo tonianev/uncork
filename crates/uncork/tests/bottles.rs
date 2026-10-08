@@ -352,6 +352,54 @@ fn bottle_set_repairs_a_retina_and_dpi_pair_that_disagrees() {
 }
 
 #[test]
+fn bottle_set_frame_cap() {
+    let home = Home::new();
+    home.write_bottle("b", FAKE_WINE);
+    let max_fps = |home: &Home| {
+        home.json(&["bottle", "info", "b"])["config"]["performance"]["max_fps"].clone()
+    };
+    assert_eq!(max_fps(&home), serde_json::Value::Null);
+
+    home.uncork()
+        .args(["bottle", "set", "b", "performance.max_fps=60"])
+        .assert()
+        .success()
+        .stdout("b: performance.max_fps = 60\n");
+    assert_eq!(max_fps(&home), 60);
+    let info = home.stdout(&["bottle", "info", "b"]);
+    assert!(info.contains("max_fps 60"), "{info}");
+
+    home.uncork()
+        .args(["bottle", "set", "b", "performance.max_fps=0"])
+        .assert()
+        .success()
+        .stdout(contains("performance.max_fps = 0 (uncapped)"));
+    assert!(
+        home.stdout(&["bottle", "info", "b"])
+            .contains("max_fps uncapped")
+    );
+
+    home.uncork()
+        .args(["bottle", "set", "b", "performance.max_fps="])
+        .assert()
+        .success()
+        .stdout(contains(
+            "performance.max_fps unset (the main display's refresh rate)",
+        ));
+    assert_eq!(max_fps(&home), serde_json::Value::Null);
+    assert!(
+        home.stdout(&["bottle", "info", "b"])
+            .contains("max_fps display")
+    );
+
+    for bad in ["fast", "-1", "60.5", "100000"] {
+        let stderr =
+            home.stderr_of_failure(&["bottle", "set", "b", &format!("performance.max_fps={bad}")]);
+        assert!(stderr.contains("is not a frame cap"), "{bad}: {stderr}");
+    }
+}
+
+#[test]
 fn bottle_set_says_to_restart_after_an_msync_change() {
     let home = Home::new();
     home.install_fake_wine();
