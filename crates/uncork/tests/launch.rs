@@ -129,6 +129,11 @@ fn run_dry_run_shows_the_prefix_and_backend() {
         plan["plan"]["command"]["env"]["WINEPREFIX"],
         home.bottle("test1").to_str().unwrap()
     );
+    assert_eq!(
+        plan["plan"]["command"]["args"],
+        serde_json::json!([exe.to_str().unwrap()]),
+        "arguments are plain strings"
+    );
 }
 
 #[test]

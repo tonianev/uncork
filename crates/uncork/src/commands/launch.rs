@@ -10,6 +10,7 @@ use serde::Serialize;
 use uncork_core::bottle::Bottle;
 use uncork_core::graphics::{Backend, BackendChoice, Strategy};
 use uncork_core::launch::{self, LaunchOptions, LaunchPlan, PlanContext, Target};
+use uncork_core::process::CommandSpec;
 use uncork_core::profile::{GameProfile, Lookup};
 use uncork_core::steam::{LaunchMode, PlayOutcome};
 use uncork_core::wine::WineRuntime;
@@ -372,18 +373,42 @@ fn ini_edits(
         .collect()
 }
 
-/// `--dry-run --json` output.
+/// `--dry-run --json` output; `plan` is [`plan_json`].
 #[derive(Debug, Serialize)]
 struct DryRunView<'a> {
-    plan: &'a LaunchPlan,
+    plan: serde_json::Value,
     ini: &'a [IniEditView],
+}
+
+/// `spec` as `--json` output shows it: its serialization, except that each
+/// argument is a plain string (non-UTF-8 bytes replaced) rather than serde's
+/// byte list for an `OsString`. Game Mode's `plan.json` keeps the exact
+/// form, and `uncork __exec` reads both.
+pub(super) fn command_json(spec: &CommandSpec) -> anyhow::Result<serde_json::Value> {
+    let mut value = serde_json::to_value(spec)?;
+    value["args"] = spec
+        .args
+        .iter()
+        .map(|arg| serde_json::Value::from(arg.to_string_lossy()))
+        .collect();
+    Ok(value)
+}
+
+/// `plan` as `--json` output shows it, its command as [`command_json`].
+fn plan_json(plan: &LaunchPlan) -> anyhow::Result<serde_json::Value> {
+    let mut value = serde_json::to_value(plan)?;
+    value["command"] = command_json(&plan.command)?;
+    Ok(value)
 }
 
 /// Print what a launch would do: backend and why, warnings, DLL copies,
 /// INI edits, the log file and the exact command.
 fn print_dry_run(ctx: &Ctx, plan: &LaunchPlan, ini: &[IniEditView]) -> anyhow::Result<()> {
     if ctx.json {
-        return output::print_json(&DryRunView { plan, ini });
+        return output::print_json(&DryRunView {
+            plan: plan_json(plan)?,
+            ini,
+        });
     }
     print!("{}", render_dry_run(plan, ini));
     Ok(())

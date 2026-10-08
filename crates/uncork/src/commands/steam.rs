@@ -150,7 +150,7 @@ fn start(ctx: &Ctx, flags: &LaunchFlags) -> anyhow::Result<ExitCode> {
         }
         let spec = client_spec(&bottle, &wine, &options.env, options.wine_debug.as_deref())?;
         if ctx.json {
-            output::print_json(&spec)?;
+            output::print_json(&super::launch::command_json(&spec)?)?;
         } else {
             if let Some(log) = &spec.log {
                 println!("Log: {}", log.display());

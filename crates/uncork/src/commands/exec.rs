@@ -22,7 +22,7 @@ use uncork_core::process::CommandSpec;
 struct SpecFile {
     program: PathBuf,
     #[serde(default)]
-    args: Vec<OsString>,
+    args: Vec<SpecArg>,
     #[serde(default)]
     env: BTreeMap<String, String>,
     #[serde(default)]
@@ -33,11 +33,30 @@ struct SpecFile {
     log: Option<PathBuf>,
 }
 
+/// One argument: a plain string (as `--json` output shows it) or serde's
+/// form of an `OsString`, `{"Unix": [<bytes>]}` (as Game Mode's
+/// `plan.json` keeps it, exact for any bytes).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum SpecArg {
+    Text(String),
+    Os(OsString),
+}
+
+impl From<SpecArg> for OsString {
+    fn from(arg: SpecArg) -> OsString {
+        match arg {
+            SpecArg::Text(text) => text.into(),
+            SpecArg::Os(os) => os,
+        }
+    }
+}
+
 impl From<SpecFile> for CommandSpec {
     fn from(file: SpecFile) -> CommandSpec {
         CommandSpec {
             program: file.program,
-            args: file.args,
+            args: file.args.into_iter().map(OsString::from).collect(),
             env: file.env,
             env_clear: file.env_clear,
             cwd: file.cwd,
@@ -46,10 +65,15 @@ impl From<SpecFile> for CommandSpec {
     }
 }
 
-/// Parse a plan file: a serialized [`CommandSpec`], or a serialized
-/// `LaunchPlan` whose `command` is used.
+/// Parse a plan file: a serialized [`CommandSpec`], a serialized
+/// `LaunchPlan` whose `command` is used, or `--dry-run --json` output (its
+/// `plan`'s `command`). Arguments may be strings or `OsString` byte lists.
 fn parse_plan(text: &str) -> anyhow::Result<CommandSpec> {
     let value: serde_json::Value = serde_json::from_str(text).context("not valid JSON")?;
+    let value = match value.get("plan") {
+        Some(plan) if value.get("program").is_none() => plan.clone(),
+        _ => value,
+    };
     let spec = match value.get("command") {
         Some(command) if value.get("program").is_none() => command.clone(),
         _ => value,
@@ -141,6 +165,28 @@ mod tests {
         })
         .to_string();
         assert_eq!(parse_plan(&text).unwrap(), spec());
+    }
+
+    #[test]
+    fn arguments_may_be_strings_or_byte_lists() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let mut expected = spec();
+        expected
+            .args
+            .push(OsString::from_vec(b"bad-\xff-arg".to_vec()));
+        let byte_form = serde_json::to_value(&expected).unwrap();
+        assert!(
+            byte_form["args"][0].get("Unix").is_some(),
+            "Game Mode's plan.json form: {byte_form}"
+        );
+        assert_eq!(parse_plan(&byte_form.to_string()).unwrap(), expected);
+
+        let mut strings = serde_json::to_value(spec()).unwrap();
+        strings["args"] = serde_json::json!(["C:\\Games\\game.exe", "-windowed"]);
+        assert_eq!(parse_plan(&strings.to_string()).unwrap(), spec());
+
+        let dry_run = serde_json::json!({ "plan": { "command": strings }, "ini": [] });
+        assert_eq!(parse_plan(&dry_run.to_string()).unwrap(), spec());
     }
 
     #[test]
