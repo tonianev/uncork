@@ -1,6 +1,6 @@
 //! Terminal output: logging setup, errors, tables, JSON, progress, prompts.
 
-use std::io::{BufRead as _, IsTerminal, Write as _};
+use std::io::{BufRead, IsTerminal, Write as _};
 
 /// Configure `tracing` from `-v` count; `RUST_LOG` wins when set.
 /// 0 → warn, 1 → info, 2 → debug, 3+ → trace. Output to stderr, no timestamps.
@@ -95,7 +95,8 @@ pub fn table(header: &[&str], rows: &[Vec<String>]) -> String {
 }
 
 /// Ask a yes/no question on stderr; `default_yes` decides the empty answer.
-/// Returns `false` without asking when stdin is not a terminal.
+/// Returns `false` without asking when stdin is not a terminal, and when
+/// input ends (Ctrl-D) instead of an answer.
 #[must_use]
 pub fn confirm(question: &str, default_yes: bool) -> bool {
     let stdin = std::io::stdin();
@@ -107,11 +108,22 @@ pub fn confirm(question: &str, default_yes: bool) -> bool {
     let _ = write!(stderr, "{question} {hint} ");
     let _ = stderr.flush();
     drop(stderr);
-    let mut answer = String::new();
-    if stdin.lock().read_line(&mut answer).is_err() {
-        return false;
+    let answer = read_answer(&mut stdin.lock(), default_yes);
+    if answer.is_none() {
+        // Ctrl-D left the cursor after the question.
+        eprintln!();
     }
-    parse_answer(&answer, default_yes)
+    answer.unwrap_or(false)
+}
+
+/// One answer line from `input`: [`parse_answer`] of it, or `None` at the
+/// end of input or on a read error (no answer, which never means yes).
+fn read_answer(input: &mut impl BufRead, default_yes: bool) -> Option<bool> {
+    let mut answer = String::new();
+    match input.read_line(&mut answer) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(parse_answer(&answer, default_yes)),
+    }
 }
 
 /// `y`/`yes` → true, `n`/`no` → false (any case), empty → `default_yes`,
@@ -341,6 +353,18 @@ mod tests {
         assert!(parse_answer(" YES \n", false));
         assert!(!parse_answer("n\n", true));
         assert!(!parse_answer("maybe\n", true));
+    }
+
+    #[test]
+    fn the_end_of_input_is_no_answer() {
+        let mut eof = std::io::Cursor::new(b"");
+        assert_eq!(read_answer(&mut eof, true), None, "Ctrl-D is not yes");
+        let mut empty = std::io::Cursor::new(b"\n");
+        assert_eq!(read_answer(&mut empty, true), Some(true));
+        let mut no = std::io::Cursor::new(b"n\n");
+        assert_eq!(read_answer(&mut no, true), Some(false));
+        let mut unterminated = std::io::Cursor::new(b"y");
+        assert_eq!(read_answer(&mut unterminated, false), Some(true));
     }
 
     #[test]
