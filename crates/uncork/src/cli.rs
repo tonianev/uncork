@@ -113,7 +113,7 @@ pub struct LaunchFlags {
     #[arg(long)]
     pub metalfx: bool,
 
-    /// Render at native Retina resolution.
+    /// Want native Retina resolution. Retina is a bottle setting (`uncork bottle set <bottle> performance.retina=true`); this only warns when the bottle has it off.
     #[arg(long)]
     pub retina: bool,
 

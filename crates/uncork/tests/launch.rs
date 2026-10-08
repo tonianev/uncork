@@ -153,6 +153,40 @@ fn run_starts_the_program_and_waits() {
 }
 
 #[test]
+fn run_prints_the_plans_warnings() {
+    let home = home_with_bottle();
+    let exe = game_in_bottle(&home, "test1");
+    home.uncork()
+        .args(["run", "-b", "test1", "--retina", "--backend", "wined3d"])
+        .arg(&exe)
+        .assert()
+        .success()
+        .stdout(contains("Started game.exe on wined3d (pid "))
+        .stderr(contains(
+            "warning: Retina mode on was asked for, but it is a bottle-wide registry setting",
+        ))
+        .stderr(contains("performance.retina=true"));
+}
+
+#[test]
+fn play_prints_the_plans_warnings() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_bottle("b", FAKE_WINE);
+    // StateFlags 2: Steam has not finished installing it.
+    let steam = home.install_fake_steam("b", &[(70, "Half-Life", 2)]);
+    PeBuilder::pe32().write(&steam.join("steamapps/common/Half-Life/hl.exe"));
+    home.fake_running_steam();
+    home.uncork()
+        .args(["play", "70", "-b", "b", "--backend", "wined3d"])
+        .assert()
+        .success()
+        .stderr(contains(
+            "warning: Steam does not list Half-Life as fully installed",
+        ));
+}
+
+#[test]
 fn play_dry_run_shows_backend_ini_and_command() {
     let home = Home::new();
     home.install_fake_wine();

@@ -790,6 +790,7 @@ fn open_tool(ctx: &Ctx, name: &str, tool: &str) -> anyhow::Result<ExitCode> {
         &target,
         &LaunchOptions::default(),
     )?;
+    super::launch::print_warnings(&plan.warnings);
     let child = launch::execute(&plan, &mut bottle, &wine)
         .with_context(|| format!("cannot start {tool}"))?;
     println!("Started {tool} in bottle {name} (pid {}).", child.id());

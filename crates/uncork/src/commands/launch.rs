@@ -136,6 +136,7 @@ pub(super) fn play_steam_game(
         print_dry_run(ctx, &outcome.plan, &ini)?;
         return Ok(ExitCode::SUCCESS);
     }
+    print_warnings(&outcome.plan.warnings);
     if outcome.started_steam && outcome.mode != LaunchMode::Applaunch {
         println!("Started Steam in bottle {}.", bottle.config.name);
     }
@@ -260,9 +261,18 @@ pub(super) fn run(ctx: &Ctx, args: &RunArgs) -> anyhow::Result<ExitCode> {
         print_dry_run(ctx, &plan, &[])?;
         return Ok(ExitCode::SUCCESS);
     }
+    print_warnings(&plan.warnings);
     let child = launch::execute(&plan, &mut bottle, &wine)
         .with_context(|| format!("cannot start {}", exe.display()))?;
     report_launch(&plan, Some(child), &bottle, &wine, args.launch.wait)
+}
+
+/// Print a plan's warnings to stderr as `warning: ...` lines (a real
+/// launch; dry runs show them with the plan).
+pub(super) fn print_warnings(warnings: &[String]) {
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
 }
 
 /// The executable `run` was given: a Windows path (`C:\...`) is mapped into
