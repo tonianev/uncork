@@ -6,19 +6,20 @@ Uncork is an independent project. It is not affiliated with or endorsed by CodeW
 
 ## Status
 
-Pre-alpha, between milestones M0 and M1. On one Mac, `uncork play rise-of-nations` starts the Windows Steam client and the game, and the game reaches its main menu on DXMT. A full match has not been played yet, and setup from nothing on a clean Mac has not been run yet. The plan and what is left are in [docs/ROADMAP.md](docs/ROADMAP.md#m1-end-to-end-on-rise-of-nations-with-a-pinned-runtime).
+Pre-alpha, between milestones M0 and M1. On one Mac, `uncork play rise-of-nations` starts the Windows Steam client and the game, and the game reaches its main menu on DXMT; a new bottle with a fresh Steam install reaches Steam's sign-in window. A full match has not been played yet, and `uncork setup` from nothing on a clean Mac has not been run yet. The plan and what is left are in [docs/ROADMAP.md](docs/ROADMAP.md#m1-end-to-end-on-rise-of-nations-with-a-pinned-runtime).
 
 | State | Area |
 |---|---|
-| Implemented, run on real hardware ([Verified on](#verified-on)) | `doctor`; `runtime install` from SHA-256-verified archives; `bottle import` of a CrossOver bottle (APFS clone, its Windows user kept); `bottle create` and `run` with real Wine, 32-bit program included; `steam games`; `play` in `direct` mode: Steam started silently on app-local DXVK, then the game on DXMT 0.80 with the profile's overrides and INI edit; `bottle kill` including Steam's running marker; msync on |
-| Implemented and unit-tested, not yet run on real hardware | `setup` and `steam install` on a clean Mac (network downloads, Valve's installer, first sign-in); `applaunch` and `standalone` launch modes; DXVK and WineD3D as game backends; `--backend`, `--metalfx`, `--retina`; D3DMetal import (`runtime import-gptk`); Game Mode app bundles (`--game-mode`, experimental); `winetricks`; `bottle set`, `env`, `tool`, `delete` |
+| Implemented, run on real hardware ([Verified on](#verified-on)) | `doctor`; `runtime install` from SHA-256-verified archives; `bottle import` of a CrossOver bottle (APFS clone, its Windows user kept); `bottle create` and `run` with real Wine, 32-bit program included; `steam install` into a new bottle, up to Steam's sign-in window; `steam games`; `inspect`; `play` in `direct` mode: Steam started silently on app-local DXVK, then the game on DXMT 0.80 with the profile's overrides and INI edit; `bottle kill` including Steam's running marker; msync on |
+| Run on real hardware, not recommended | Game Mode app bundles (`--game-mode`, experimental, off by default): the bundle starts the game through LaunchServices, but Rise of Nations crashed at startup in 3 of 5 such launches ([docs/PERFORMANCE.md](docs/PERFORMANCE.md#game-mode)) |
+| Implemented and unit-tested, not yet run on real hardware | `setup` from nothing on a clean Mac; `applaunch` and `standalone` launch modes; DXVK and WineD3D as game backends; `--backend`, `--metalfx`, `--retina`; D3DMetal import (`runtime import-gptk`); `winetricks`; `bottle set`, `env`, `tool`, `delete` |
 | Planned | Wine runtime built by Uncork's own CI from CrossOver 26.3 sources (M2); `uncork bench`, a compatibility database and reports (M3); a SwiftUI app over the Rust core (M4); a post-Rosetta ARM64 path (M5) |
 
 The unit and integration tests use fake `wine` and `wineserver` scripts; they never start Wine or download anything ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#testing)).
 
 ## Verified on
 
-Hands-on results from 2026-10-07, through the `uncork` CLI itself unless noted. The game's profile stays `untested` until a full match has been played ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#current-results)).
+Hands-on results from two sessions on 2026-10-07, through the `uncork` CLI itself unless noted. The first used a Steam bottle imported from CrossOver. The second, that evening, created a new bottle and installed Steam into it, tried Game Mode bundles and full screen, and reran the checks marked "after the fixes" with a release build that has every fix through commit 7dcd07a. The game's profile stays `untested` until a full match has been played ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#current-results)).
 
 | | |
 |---|---|
@@ -26,13 +27,13 @@ Hands-on results from 2026-10-07, through the `uncork` CLI itself unless noted. 
 | macOS | 27.0.1 (26A434), Rosetta 2 installed |
 | Uncork | 0.1.0, `main` of 2026-10-07 |
 | Components | Wine `winecx-gptk-4.7.3` (`wine --version`: wine-11.17), DXMT 0.80, DXVK-macOS 1.10.3-20230507 |
-| Steam | Windows client build 1788652215 (64-bit), in a bottle imported from CrossOver |
+| Steam | Windows client build 1788652215 (64-bit) in a bottle imported from CrossOver; a fresh install from Valve's current installer in a new bottle |
 
 | Step | Result |
 |---|---|
-| `uncork doctor` | Reported Apple M5 Max, macOS 27.0.1, Rosetta present, the `rosetta-sunset` notice and the installed CrossOver |
+| `uncork doctor` | Reported Apple M5 Max, macOS 27.0.1, Rosetta present, the `rosetta-sunset` notice and the installed CrossOver; after the fixes, `dxvk-installed` ok |
 | `uncork runtime install all -y` | Installed the three components in 3.4 s from the download cache (the 461 MB, 19 MB and 3 MB archives had been downloaded and SHA-256-verified earlier) |
-| `uncork bottle import "<CrossOver>/Bottles/Steam" --name steam` | Cloned the 21 GB CrossOver bottle with APFS clones in about 6 s, original untouched; set `USER=crossover` and `LOGNAME=crossover` for the bottle |
+| `uncork bottle import "<CrossOver>/Bottles/Steam" --name steam` | Cloned the 21 GB CrossOver bottle with APFS clones in about 6 s, the original's files untouched; set `USER=crossover` and `LOGNAME=crossover` for the bottle |
 | `uncork steam games` | Listed 228980 (Steamworks Common Redistributables), 287450 (Rise of Nations: Extended Edition, 2.7 GB, profile matched) and 813780 (Age of Empires II: Definitive Edition, 16.5 GB, profile matched) |
 | `uncork play rise-of-nations --hud` | Started Steam (`-silent`) and then the game, about 44 s in total. The game ran on DXMT 0.80: `lsof` showed Uncork's `syswow64/d3d11.dll` and `dxgi.dll`, the game's own `d3dcompiler_47.dll`, builtin `winemetal.dll` with `winemetal.so`, and Apple's AGX Metal driver. Steam's GPU process had the app-local DXVK `d3d11.dll` from `Steam/bin/cef/cef.win64` loaded at the same time. `SkipIntroMovies=1` was written to `rise2.ini` |
 | Same configuration, run by hand earlier that day | Main menu rendered, windowed; Metal HUD: 120 FPS (the display's cap), GPU time 0.48 ms per frame, frame interval 8.33 ms; Game Mode off |
@@ -40,8 +41,25 @@ Hands-on results from 2026-10-07, through the `uncork` CLI itself unless noted. 
 | `uncork run --bottle smoke-test --wait 'C:\windows\syswow64\cmd.exe' -- /c 'echo hello & ver'` | The 32-bit `cmd.exe` printed to the per-launch log |
 | `uncork bottle kill steam` | Stopped every process in the bottle and reset Steam's `ActiveProcess` `pid` to 0 |
 | Steam's window | Client chrome, sign-in and the library list render; the embedded store page body stays black ([docs/STEAM.md](docs/STEAM.md#known-issues)) |
+| `uncork bottle create fresh`, then `uncork steam install --bottle fresh -y` | Valve's `SteamSetup.exe` (2,380,800 bytes) matched the pinned SHA-256; the silent install wrote `Steam.exe` (capital S); the client's first start downloaded 336 MB and showed the full "Sign in to Steam" window, with its fields and QR code, on app-local DXVK within about a minute. Not signed in: the credentials are the user's |
+| A Wine command right after `uncork bottle create` | At first it exited with status 1 and no output: `wineboot` and `regedit` had run without the bottle's `WINEMSYNC`, and msync is a per-wineserver setting. Fixed in commit b8f7255; after the fix, `steam install` right after `create` succeeds |
+| `uncork inspect` on `riseofnations.exe`, after the fixes | 32-bit; not large-address-aware, with the `WINE_LARGE_ADDRESS_AWARE=1` hint; NX-compatible; Direct3D 11 through `d3dgl.dll`; Steamworks yes; 11 modules without `NX_COMPAT`; backend DXMT |
+| `uncork play rise-of-nations --dry-run`, after the fixes | DXMT with the profile's environment, overrides and INI edit; the environment includes `SteamAppId=287450` and `SteamGameId=287450` |
+| `uncork run 'C:\windows\syswow64\cmd.exe'`, after the fixes | No Direct3D 12 warning: the DLLs in `syswow64` are Windows' own and are no longer scanned as the program's |
+| Rise of Nations through a Game Mode bundle (`--game-mode`) | The bundle's launcher worked under LaunchServices (its environment checked with a plan that ran `/usr/bin/env`). The game crashed at startup in 3 of 5 bundle launches, with an unhandled page fault reading address 0 in the game's code. It never crashed in 6 or more direct launches, nor through the bundle with Wine's `loaddll` and exception-handling debug channels on, so the crash is timing-sensitive |
+| Rise of Nations in full screen | On a 5K external display with Retina mode off, the picture was cropped and offset; windowed works |
+| Steam in the imported bottle | Stopped signing in by itself: its connection log shows it connecting but never logging on with the saved session, and it showed the sign-in window. Probably Steam rotated the saved login after several copies of the bottle had used it |
 
-Not verified yet: a full match, audio, videos, multiplayer, alt-tab and full screen; Game Mode through an app bundle (the display was asleep during that test); `uncork setup` with a fresh Steam install on a clean Mac.
+Not verified yet: a full match, audio, videos, multiplayer and alt-tab; full screen on other displays; whether Game Mode turns on through a bundle and what it changes (it needs full screen); `uncork setup` from nothing on a clean Mac; signing in to a fresh install.
+
+## Known issues
+
+| Issue | What to do | Details |
+|---|---|---|
+| Rise of Nations in full screen renders cropped and offset on a 5K external display (Retina mode off) | Play windowed: `Fullscreen=0` under `[RISE OF NATIONS]` in the game's `rise2.ini` | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#known-issues) |
+| Game Mode bundles (`--game-mode`) crashed Rise of Nations at startup in 3 of 5 launches | Leave Game Mode off, the default | [docs/PERFORMANCE.md](docs/PERFORMANCE.md#game-mode) |
+| A bottle imported from CrossOver can lose its Steam sign-in, and CrossOver's bottle may too | Import with `--move`, or expect to sign in again; use only one of the two copies | [docs/STEAM.md](docs/STEAM.md#known-issues) |
+| Steam's embedded store page stays black | Open store pages in a Mac browser | [docs/STEAM.md](docs/STEAM.md#known-issues) |
 
 ## Why
 
@@ -91,14 +109,16 @@ Then either set everything up from nothing:
 uncork setup                     # installs Wine, DXMT and DXVK, creates the `steam` bottle, installs Steam
 ```
 
-`uncork setup` asks once, then downloads 485.0 MB: the pinned components from their publishers (Wine 461.1 MB, DXMT 18.7 MB, DXVK 2.8 MB) and Valve's `SteamSetup.exe` (about 2.4 MB) from Valve. Steam then opens a window: sign in yourself (Uncork never sees your credentials) and let the first update finish. That first start has been reported to take 15 to 25 minutes under Rosetta; Uncork has not measured it yet ([docs/STEAM.md](docs/STEAM.md#the-first-start)). Install the game from the Steam window.
+`uncork setup` asks once, then downloads 485.0 MB: the pinned components from their publishers (Wine 461.1 MB, DXMT 18.7 MB, DXVK 2.8 MB) and Valve's `SteamSetup.exe` (about 2.4 MB) from Valve. Steam then opens a window: sign in yourself (Uncork never sees your credentials) and let the first update finish. On 2026-10-07 a fresh install's first start downloaded 336 MB and showed the sign-in window within about a minute; others have reported 15 to 25 minutes under Rosetta ([docs/STEAM.md](docs/STEAM.md#the-first-start)). Install the game from the Steam window.
 
-Or, if CrossOver already has a Steam bottle with your sign-in and games, clone it instead (the original is not touched):
+Or, if CrossOver already has a Steam bottle with your sign-in and games, clone it instead (the original's files are not touched):
 
 ```bash
 uncork runtime install --yes     # Wine, DXMT and DXVK, 482.6 MB
 uncork bottle import "$HOME/Library/Application Support/CrossOver/Bottles/Steam" --name steam
 ```
+
+The clone carries CrossOver's saved Steam login, and when two copies use one login Steam can ask you to sign in again in either of them, CrossOver's included. If you will not go back to CrossOver, add `--move` to move the bottle instead of cloning it; otherwise expect to sign in once more, and from then on use only one of the two ([docs/STEAM.md](docs/STEAM.md#known-issues)).
 
 Then play:
 
@@ -128,7 +148,7 @@ Everything Uncork writes lives under `~/Library/Application Support/Uncork`, or 
    v
  wine (x86-64, under Rosetta 2)  ----  wineserver (one per bottle; msync on)
    |
-   +-- steam.exe, steamwebhelper.exe   DXVK d3d11 from Steam/bin/cef/cef.win64 (app-local)
+   +-- Steam.exe, steamwebhelper.exe   DXVK d3d11 from Steam/bin/cef/cef.win64 (app-local)
    |                                   -> MoltenVK -> Metal; Wine's own dxgi
    |
    +-- riseofnations.exe (32-bit)      DXMT d3d11, dxgi from syswow64 -> winemetal -> Metal
@@ -143,7 +163,7 @@ The built-in profiles live in [profiles/](profiles/). Any other Windows program 
 
 | Game | Steam app | Executable | Bits / API | Backend, then fallbacks | Status |
 |---|---|---|---|---|---|
-| Rise of Nations: Extended Edition | 287450 | `riseofnations.exe` | 32 / D3D11, geometry shaders | DXMT, WineD3D | `untested`: main menu reached on DXMT; no match played yet |
+| Rise of Nations: Extended Edition | 287450 | `riseofnations.exe` | 32 / D3D11, geometry shaders | DXMT, WineD3D | `untested`: main menu reached on DXMT; no match played yet; play windowed for now |
 | Age of Empires II: Definitive Edition | 813780 | `AoE2DE_s.exe` | 64 / D3D11 | DXMT, D3DMetal, DXVK, WineD3D | `untested`: not launched yet |
 
 Status levels and how to report a result are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md). The profile format is in [profiles/README.md](profiles/README.md).
@@ -174,7 +194,7 @@ Uncork differs from these in three ways: the core is a permissively licensed (MI
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Every performance knob, its default and the evidence; measured numbers; how to benchmark |
 | [docs/STEAM.md](docs/STEAM.md) | Steam in a bottle: install, first run, graphics, flags, launch modes, stopping, known issues |
 | [docs/RUNTIME.md](docs/RUNTIME.md) | Where the Wine runtime comes from, feature tags, component layouts, updating a pin, the patch queue |
-| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | Status levels, current results, filing a game report, adding a profile |
+| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | Status levels, current results, known issues, filing a game report, adding a profile |
 | [profiles/README.md](profiles/README.md) | The game profile schema |
 | [docs/LEGAL.md](docs/LEGAL.md) | What Uncork downloads and never redistributes, D3DMetal, Steam, LGPL, trademarks |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Milestones M0 to M5, progress, acceptance criteria, risks including the end of Rosetta |

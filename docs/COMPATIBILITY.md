@@ -1,6 +1,6 @@
 # Compatibility
 
-This document explains how Uncork records how well a game runs: the five status levels, what a test report must contain and how to file one, how a report becomes part of a game's profile, and how to write a new profile. Reports are the most useful contribution a player can make and need no Rust. The profile file format itself is in [profiles/README.md](../profiles/README.md).
+This document explains how Uncork records how well a game runs: the five status levels, the current results and known issues, what a test report must contain and how to file one, how a report becomes part of a game's profile, and how to write a new profile. Reports are the most useful contribution a player can make and need no Rust. The profile file format itself is in [profiles/README.md](../profiles/README.md).
 
 ## Status levels
 
@@ -22,10 +22,19 @@ First-hand results so far. Both built-in profiles are `untested`: reaching the m
 
 | Game | Status | Run on | Verified | Not tested yet |
 |---|---|---|---|---|
-| Rise of Nations: Extended Edition (287450) | `untested` | 2026-10-07; MacBook Pro M5 Max, macOS 27.0.1; Wine `winecx-gptk-4.7.3`, DXMT 0.80, Steam client 1788652215 in a bottle imported from CrossOver | `uncork play rise-of-nations --hud` started Steam, then the game on DXMT 0.80 (its `d3d11.dll` and `dxgi.dll` loaded from `syswow64`, the game's own `d3dcompiler_47.dll`) in about 44 s; `SkipIntroMovies=1` was applied. In a run by hand with the same DLLs and overrides, the main menu rendered windowed at 1728x1117: 120 FPS (the display's cap), GPU time 0.48 ms per frame. Wine logs that no General MIDI DLS collection is installed, so DirectMusic music may be silent. Uncork warns about 11 DLLs without `NX_COMPAT` that ship with the game | A match or skirmish, save and load, music and sound, videos, the multiplayer lobby list, alt-tab, full screen, Game Mode, WineD3D for comparison |
+| Rise of Nations: Extended Edition (287450) | `untested` | 2026-10-07; MacBook Pro M5 Max, macOS 27.0.1; Wine `winecx-gptk-4.7.3`, DXMT 0.80, Steam client 1788652215 in a bottle imported from CrossOver | `uncork play rise-of-nations --hud` started Steam, then the game on DXMT 0.80 (its `d3d11.dll` and `dxgi.dll` loaded from `syswow64`, the game's own `d3dcompiler_47.dll`) in about 44 s; `SkipIntroMovies=1` was applied. In a run by hand with the same DLLs and overrides, the main menu rendered windowed at 1728x1117: 120 FPS (the display's cap), GPU time 0.48 ms per frame. `uncork inspect` reports a 32-bit, NX-compatible executable that is not large-address-aware, Direct3D 11 through `d3dgl.dll`, Steamworks, 11 DLLs without `NX_COMPAT` (which Uncork warns about) and DXMT as the backend; `--dry-run` sets `SteamAppId` and `SteamGameId` to 287450. Wine logs that no General MIDI DLS collection is installed, so DirectMusic music may be silent. Full screen rendered cropped and offset on a 5K external display, and through a Game Mode bundle the game crashed at startup in 3 of 5 launches ([Known issues](#known-issues)) | A match or skirmish, save and load, music and sound, videos, the multiplayer lobby list, alt-tab, full screen on other displays, WineD3D for comparison |
 | Age of Empires II: Definitive Edition (813780) | `untested` | 2026-10-07, same Mac and bottle | `uncork steam games` found it installed (16.5 GB) and matched its profile | Everything; it has not been launched |
 
 The full record of that day, with the commands, is in the [README](../README.md#verified-on).
+
+## Known issues
+
+Problems seen in first-hand runs that a game's `[compat] notes` also carry. Each stays here until a fix is verified.
+
+| Game | Issue | Workaround | Seen |
+|---|---|---|---|
+| Rise of Nations: Extended Edition | In full screen, the picture is cropped and offset on a 5K external display with Retina mode off | Play windowed: set `Fullscreen=0` under `[RISE OF NATIONS]` in `%APPDATA%\Microsoft Games\Rise of Nations\rise2.ini`, inside the bottle under `drive_c/users/<user>/AppData/Roaming/` (`<user>` is `crossover` in a bottle imported from CrossOver). To have Uncork enforce it on every launch, copy [the built-in profile](../profiles/rise-of-nations-extended-edition.toml) to `$UNCORK_HOME/profiles/` and add an `[[ini]]` entry for that key ([profiles/README.md](../profiles/README.md#ini-edits)) | 2026-10-07, M5 Max, macOS 27.0.1 |
+| Rise of Nations: Extended Edition | Started through a Game Mode bundle (`--game-mode`), the game crashed at startup in 3 of 5 launches, with an unhandled page fault reading address 0 in its own code; never when started directly | Leave Game Mode off, the default ([PERFORMANCE.md](PERFORMANCE.md#game-mode)) | 2026-10-07, M5 Max, macOS 27.0.1 |
 
 ## What to test
 

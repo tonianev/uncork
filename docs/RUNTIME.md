@@ -61,11 +61,11 @@ A Wine component's feature tags say what it supports. The planner reads them; it
 |---|---|---|
 | `wow64` | Runs 32-bit Windows programs (new-style WoW64: `--enable-archs=i386,x86_64`) | `doctor` warns without it; a plan for a 32-bit game on a runtime without it carries a warning |
 | `msync` | Honors `WINEMSYNC=1` (Mach-semaphore synchronization) | `WINEMSYNC=1` is set only with this tag |
-| `dxmt` | The Mac driver exports the Metal view API DXMT looks up (`macdrv_functions`; [winemetal_unix.c](https://github.com/3Shain/dxmt/blob/main/src/winemetal/unix/winemetal_unix.c)) | DXMT counts as available only with this tag |
-| `d3dmetal` | Carries the CrossOver-derived glue D3DMetal needs (`__wine_unix_call` export, `CX_APPLEGPTK_LIBD3DSHARED_PATH`) | D3DMetal counts as available only with this tag. Activating it also needs `renderer-dllpath` or `dllpath-prepend` |
+| `dxmt` | The Mac driver exports the Metal view API DXMT looks up (`macdrv_functions`; [winemetal_unix.c](https://github.com/3Shain/dxmt/blob/main/src/winemetal/unix/winemetal_unix.c)) | DXMT counts as available only with this tag, and, when its DLLs are copied into the prefix (`PrefixNative`), only with the runtime's own `lib/wine/x86_64-unix/winemetal.so` (`graphics::runtime_blocker`) |
+| `d3dmetal` | Carries the CrossOver-derived glue D3DMetal needs (`__wine_unix_call` export, `CX_APPLEGPTK_LIBD3DSHARED_PATH`) | D3DMetal counts as available only with this tag and with `renderer-dllpath` or `dllpath-prepend`, which activating it needs, so on the catalog's runtime it is never chosen automatically (`graphics::runtime_blocker`) |
 | `renderer-dllpath` | Honors `WINEDLLPATH_DXMT`, `WINEDLLPATH_DXVK`, `WINEDLLPATH_D3DMETAL` per process | `RendererEnv` activation. No runtime in the catalog has it |
 | `dllpath-prepend` | Honors `WINEDLLPATH_PREPEND` per process | `DllPathPrepend` activation. No runtime in the catalog has it; Uncork's own runtime is to get it from [patch 1](#patch-queue) |
-| `large-address-aware` | Honors `WINE_LARGE_ADDRESS_AWARE=1` | Profiles that set it take effect |
+| `large-address-aware` | Honors `WINE_LARGE_ADDRESS_AWARE=1` | Profiles that set it take effect; a plan for a 32-bit program with a graphics API that lacks the PE flag suggests it |
 
 A tag is a claim. Add one only after checking the binary, for example `strings lib/wine/x86_64-unix/ntdll.so | grep -c WINEMSYNC` for `msync`, `WINE_LARGE_ADDRESS_AWARE` for `large-address-aware`, `WINEDLLPATH_DXMT` for `renderer-dllpath`, and a 32-bit test program for `wow64`.
 

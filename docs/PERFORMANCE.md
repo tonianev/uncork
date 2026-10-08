@@ -21,13 +21,13 @@ This document lists every setting Uncork uses to make games run fast on Apple Si
 | `performance.retina` | Off | Mac driver `RetinaMode` | [Retina mode](#retina-mode) |
 | `performance.hud` | Off | Sets `MTL_HUD_ENABLED=1` | [Metal HUD](#metal-performance-hud) |
 | `performance.metalfx` | Off | `DXMT_METALFX_SPATIAL_SWAPCHAIN=1` (DXMT) or `D3DM_ENABLE_METALFX=1` (D3DMetal) | [MetalFX](#metalfx) |
-| `performance.game_mode` | Off (experimental, unverified) | Launch through a games-category app bundle; `--game-mode` does it for one launch | [Game Mode](#game-mode) |
+| `performance.game_mode` | Off (experimental, not recommended) | Launch through a games-category app bundle; `--game-mode` does it for one launch. Rise of Nations crashed at startup in 3 of 5 such launches | [Game Mode](#game-mode) |
 | Logging | Off | `WINEDEBUG=-all`, `DXMT_LOG_LEVEL=none`, `DXVK_LOG_LEVEL=none`, `MVK_CONFIG_LOG_LEVEL=1`; `--wine-debug <channels>` turns Wine channels and backend logs on for one launch | [Logging](#logging) |
 | Shader caches | Per bottle | `DXMT_SHADER_CACHE_PATH=<bottle>/cache/dxmt`, `DXVK_STATE_CACHE_PATH=<bottle>/cache/dxvk` | [Shader caches](#shader-caches) |
 | DXVK pipeline compilation | Async | `DXVK_ASYNC=1`, `MVK_CONFIG_RESUME_LOST_DEVICE=1` | [DXVK](#dxvk-on-moltenvk) |
 | WineD3D renderer | OpenGL | `WINE_D3D_CONFIG=renderer=gl` | [wined3d_main.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/wined3d/wined3d_main.c) |
 | Cursor confinement, vertical sync, App Nap | Confine on, vsync allowed, App Nap off | Mac driver registry keys | [Mac driver keys](#mac-driver-keys) |
-| Large address aware | Per profile (`WINE_LARGE_ADDRESS_AWARE=1` for Rise of Nations) | 4 GiB address space for a 32-bit game | [Large address aware](#large-address-aware) |
+| Large address aware | Per profile (`WINE_LARGE_ADDRESS_AWARE=1` for Rise of Nations); a plan warning suggests it for a 32-bit program with a graphics API that lacks the flag | 4 GiB address space for a 32-bit game | [Large address aware](#large-address-aware) |
 
 ## Measured so far
 
@@ -42,8 +42,9 @@ First-hand numbers, 2026-10-07: MacBook Pro with Apple M5 Max, macOS 27.0.1 (26A
 | `uncork runtime install all` from verified cached archives | 3.4 s for Wine, DXMT and DXVK |
 | `uncork bottle import` of a 21 GB CrossOver bottle | About 6 s; APFS clones use almost no extra space until files change |
 | `wine C:\windows\syswow64\cmd.exe /c ver` (32-bit) | 1.2 s, by hand |
+| Fresh Steam install, first start to the sign-in window | About a minute, including the client's 336 MB download |
 
-Not measured yet: a match or skirmish, the 99th-percentile frame time, WineD3D on the same scene, Game Mode, and a long session.
+Not measured yet: a match or skirmish, the 99th-percentile frame time, WineD3D on the same scene, Game Mode (it needs full screen, which rendered cropped; see [Game Mode](#game-mode)), and a long session.
 
 ## msync
 
@@ -58,7 +59,7 @@ Source: [marzent/wine-msync](https://github.com/marzent/wine-msync).
 
 Rules:
 
-- Every process of a wineserver must agree. A client whose `WINEMSYNC` differs from the server's logs an error and exits. Uncork therefore sets it in the base environment shared by Steam, games and tools ([ARCHITECTURE.md](ARCHITECTURE.md#environment)). A profile that overrides `wine.msync` needs the bottle's wineserver restarted (`uncork bottle kill <bottle>`) when the value differs from what is running.
+- Every process of a wineserver must agree. A client whose `WINEMSYNC` differs from the server's logs an error and exits. Uncork therefore sets it in the base environment shared by Steam, games, tools and every other Wine command it runs in a bottle, `wineboot` and `regedit` included ([ARCHITECTURE.md](ARCHITECTURE.md#environment)). When those two ran without it, the first command after `uncork bottle create` exited with status 1 and no output (2026-10-07, fixed in commit b8f7255). A profile that overrides `wine.msync` needs the bottle's wineserver restarted (`uncork bottle kill <bottle>`) when the value differs from what is running.
 - `WINEMSYNC_QLIMIT` sizes the server's message queue (default 50). There is no evidence for changing it.
 - `WINEESYNC` is never set: esync is gone from the CrossOver 26 tree, and wine-staging dropped it at v10.16 ([wine-staging](https://github.com/wine-staging/wine-staging/tree/v11.18/patches)).
 - Stock msync was slower than no msync on multi-object waits until fixes in the frankea/dappermint line: four-way multi-wait 366 to 84 ms, alertable wait 293 to 61 ms (their microbenchmarks, not independently reproduced; [frankea/Whisky v4.6.4-beta.1](https://github.com/frankea/Whisky/releases/tag/v4.6.4-beta.1)). The catalog's `winecx-gptk-4.7.3` comes from the dappermint line ([release](https://github.com/dappermint/winecx-gptk/releases/tag/runtime-v4.7.3)); Uncork's own runtime build (M2) is to carry the fixes as a patch ([RUNTIME.md](RUNTIME.md#patch-queue)).
@@ -76,6 +77,8 @@ Rosetta translates AVX and AVX2 but not AVX-512 ([Apple](https://developer.apple
 ## Retina mode
 
 With `RetinaMode` on, Wine's Mac driver gives Windows programs the full backing-pixel resolution, so a game renders up to four times the pixels (twice in each direction). The key is read only prefix-wide, because DPI must agree across processes ([macdrv_main.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/winemac.drv/macdrv_main.c)). Default off. Turn it on for a game whose UI scales and that has GPU headroom; leave it off for pixel-based UIs such as Rise of Nations'. Because it is prefix-wide it also changes the Steam client. For the same reason a launch never changes it: `uncork bottle set <bottle> performance.retina=true` rewrites the bottle's registry, while `--retina` or a profile's `retina` that differs from the bottle's only adds a warning to the plan.
+
+Full screen on a high-resolution display is an open problem. On 2026-10-07 Rise of Nations in full screen on a 5K external display, with Retina mode off, rendered cropped and offset; windowed (`Fullscreen=0` in its `rise2.ini`) rendered correctly. Whether Retina mode, `CaptureDisplaysForFullscreen` or the game's resolution setting changes that has not been tested ([ROADMAP.md](ROADMAP.md#open-questions)). Play windowed for now.
 
 ## Metal performance HUD
 
@@ -146,6 +149,8 @@ Uncork writes these under `HKEY_CURRENT_USER\Software\Wine\Mac Driver` when it c
 
 A 32-bit program without the `IMAGE_FILE_LARGE_ADDRESS_AWARE` flag gets 2 GiB of address space; with it, a 32-bit process under new WoW64 gets 4 GiB ([Proton virtual.c](https://github.com/ValveSoftware/wine/blob/proton_10.0/dlls/ntdll/unix/virtual.c)). `uncork inspect` shows the flag. Rise of Nations: Extended Edition's executable lacks it, so its profile sets `WINE_LARGE_ADDRESS_AWARE=1`.
 
+When a 32-bit program lacks the flag, the runtime honors the variable and nothing sets it, the launch plan carries a warning that suggests it. The warning is limited to programs with a graphics API, so games get it and Windows tools such as `cmd.exe` or `winecfg` do not.
+
 CrossOver-derived Wine honors that variable (`CROSSOVER HACK: bug 17634` in [virtual.c](https://github.com/dappermint/winecx/blob/crossover-26.3.0/dlls/ntdll/unix/virtual.c)); it is off unless set. Upstream Wine honors only the PE flag. The catalog marks runtimes that honor it with the `large-address-aware` feature; on others the variable does nothing.
 
 ## DEP and NX_COMPAT
@@ -163,11 +168,22 @@ This is the most expensive pitfall known for 32-bit games under Rosetta.
 
 macOS gives a game Game Mode (priority CPU and GPU access, lower Bluetooth latency) when an app whose bundle declares the games category is frontmost and full screen; it does not activate for binaries spawned from a terminal ([Apple Support](https://support.apple.com/en-us/105118), [macOS 26 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-26-release-notes), [LSSupportsGameMode](https://developer.apple.com/documentation/bundleresources/information-property-list/lssupportsgamemode)). Neither Wine's loader nor CrossOver declares a games category ([wine_info.plist.in](https://gitlab.winehq.org/wine/wine/-/blob/master/loader/wine_info.plist.in)).
 
-`--game-mode` on one launch, or `performance.game_mode = true` for a bottle (`uncork bottle set <bottle> performance.game_mode=true`), routes `direct` and `standalone` launches through a generated `apps/<id>.app` that LaunchServices opens with `/usr/bin/open -n -W`; its launcher `exec`s the Wine loader in place ([ARCHITECTURE.md](ARCHITECTURE.md#game-mode-experimental)). In `applaunch` mode the Steam client starts the game and no bundle is used. The wiring is implemented and unit-tested but not verified on real hardware: a check on 2026-10-07 was inconclusive because the display was asleep. The manual run in [Measured so far](#measured-so-far) did not use a bundle, and the Metal HUD reported Game Mode off. It stays off by default until these open questions are answered on real hardware:
+`--game-mode` on one launch, or `performance.game_mode = true` for a bottle (`uncork bottle set <bottle> performance.game_mode=true`), routes `direct` and `standalone` launches through a generated `apps/<id>.app` that LaunchServices opens with `/usr/bin/open -n -W`; its launcher `exec`s the Wine loader in place ([ARCHITECTURE.md](ARCHITECTURE.md#game-mode-experimental)). In `applaunch` mode the Steam client starts the game and no bundle is used. The manual run in [Measured so far](#measured-so-far) did not use a bundle, and the Metal HUD reported Game Mode off.
 
-1. Does macOS keep Game Mode for the bundle after its launcher `exec`s the Wine loader?
-2. Does Game Mode turn on with the Mac driver's window-level full screen, and does `CaptureDisplaysForFullscreen=y` change that?
-3. Is there a measurable frame-time difference on Rise of Nations with Game Mode on versus off?
+Results on 2026-10-07 (M5 Max, macOS 27.0.1, Rise of Nations on DXMT 0.80):
+
+| What | Result |
+|---|---|
+| The bundle's launcher under LaunchServices | Works: a plan that ran `/usr/bin/env` through the bundle showed the plan's environment |
+| Rise of Nations through the bundle | Crashed at startup in 3 of 5 launches, with an unhandled page fault reading address 0 in the game's own code. It never crashed in 6 or more direct launches. With Wine's `loaddll` and exception-handling debug channels on, it did not crash through the bundle either, so the crash depends on timing |
+| Game Mode's effect | Not measurable: Game Mode needs full screen, and Rise of Nations in full screen rendered cropped and offset on a 5K external display with Retina mode off. Windowed works |
+
+So Game Mode stays experimental, off by default and not recommended. Open questions, to answer on real hardware:
+
+1. Why does Rise of Nations crash at startup when started through the bundle, and only then?
+2. Does macOS keep Game Mode for the bundle after its launcher `exec`s the Wine loader?
+3. Does Game Mode turn on with the Mac driver's window-level full screen, and does `CaptureDisplaysForFullscreen=y` change that? This needs full screen that renders correctly first ([Retina mode](#retina-mode)).
+4. Is there a measurable frame-time difference on Rise of Nations with Game Mode on versus off?
 
 ## Not used, and why
 

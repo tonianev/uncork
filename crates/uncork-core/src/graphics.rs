@@ -18,10 +18,11 @@
 //!
 //! # Activation strategies
 //!
-//! Backends are chosen **per process** so the Steam client (which must stay
-//! on WineD3D; DXMT cannot present across processes) and a game can run in
-//! the same prefix at the same time. How depends on what the Wine runtime
-//! supports, declared as component features in the catalog:
+//! Backends are chosen **per process** so the Steam client (whose web helper
+//! loads DXVK from its own directory, see [`crate::steam`]; DXMT cannot
+//! present across processes) and a game can run in the same prefix at the
+//! same time. How depends on what the Wine runtime supports, declared as
+//! component features in the catalog:
 //!
 //! - [`Strategy::RendererEnv`] (feature `renderer-dllpath`, Gcenx's
 //!   Sikarugir engines): set `WINEDLLPATH_DXMT`, `WINEDLLPATH_DXVK` or

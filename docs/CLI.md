@@ -9,6 +9,7 @@ Conventions that apply to every command:
 - `--json` and `-v`/`--verbose` are global and may follow any subcommand.
 - `-b`/`--bottle` defaults to `default_bottle` in `$UNCORK_HOME/config.toml`, which `uncork setup` sets (normally `steam`).
 - Arguments after `--` go to the Windows program unchanged (`uncork play rise-of-nations -- -windowed`).
+- Downloads are confirmed with a `[Y/n]` question: an empty line means yes, and the end of input (Ctrl-D) means no. Without a terminal on stdin nothing is downloaded unless `-y`/`--yes` is given.
 - Everything Uncork writes lives under `$UNCORK_HOME`, by default `~/Library/Application Support/Uncork`.
 - Exit status: 0 on success; 1 when the command fails, or with `--wait` when the program exits unsuccessfully; 2 for a usage error. Errors print `error:` and one `caused by:` line per further cause.
 
@@ -70,6 +71,8 @@ Options:
 
 ## uncork doctor
 
+The checks, their levels and their fixes are listed in [ARCHITECTURE.md](ARCHITECTURE.md#doctor). A missing DXVK is a warning: the Steam client's windows stay black without it.
+
 ```text
 Check this Mac and the Uncork installation, and say how to fix problems
 
@@ -84,6 +87,8 @@ Options:
 ```
 
 ## uncork setup
+
+Asks once for every download, then installs the missing components, creates the bottle and installs Steam. A bottle that an earlier `setup` or `bottle create` did not finish (for example because `wineboot` hung) is finished first; components that are already installed and a Steam that is already in the bottle are reused.
 
 ```text
 One-shot setup: install the recommended components, create the `steam` bottle and install Steam into
@@ -104,7 +109,9 @@ Options:
 
 ## uncork play
 
-Resolves the game as a profile id, a Steam app id, an exact name or a unique part of a name. A Steam game starts in the launch mode its profile names ([STEAM.md](STEAM.md#launch-modes)); without a profile, an installed Steam app id is started directly. `--dry-run` prints the backend, the reason, warnings, DLL copies, INI edits, the log file and the exact command; with `--json` it prints the plan as JSON.
+Resolves the game as a profile id, a Steam app id, an exact name or a unique part of a name. The first of these steps that matches anything decides; several matches are an error that lists the profile ids to choose from. With no matching profile, an installed Steam app id is started directly. A Steam game starts in the launch mode its profile names ([STEAM.md](STEAM.md#launch-modes)); in `direct` mode it also gets `SteamAppId` and `SteamGameId` set to its app id. `--dry-run` prints the backend, the reason, warnings, DLL copies, INI edits, the log file and the exact command; with `--json` it prints the plan as JSON, the command's arguments as strings. A real launch prints the same warnings to stderr as `warning:` lines.
+
+`--wait` waits for the bottle's wineserver only when Steam does not run in the bottle, because the Steam client keeps it alive: in `direct` mode it waits for the game alone; in `applaunch` mode the process Uncork starts is the Steam client, so it waits until Steam exits; in `standalone` mode it waits for the game, then for the wineserver unless Steam runs.
 
 ```text
 Find a game profile and play it (through Steam when the game is on Steam)
@@ -146,7 +153,8 @@ Options:
           Upscale with MetalFX where the backend supports it
 
       --retina
-          Render at native Retina resolution
+          Want native Retina resolution. Retina is a bottle setting (`uncork bottle set <bottle>
+          performance.retina=true`); this only warns when the bottle has it off
 
       --wine-debug <CHANNELS>
           Enable Wine debug channels (e.g. `+loaddll,+d3d`); output goes to the launch log
@@ -172,7 +180,7 @@ Options:
 
 ## uncork run
 
-A Windows path (`C:\...`) is mapped into the bottle's `drive_c`; either way the file must exist. No profile applies: the backend comes from `--backend`, else the bottle's `graphics.backend`, else a scan of the executable.
+A Windows path (`C:\...`) is mapped into the bottle's `drive_c`; either way the file must exist. No profile applies: the backend comes from `--backend`, else the bottle's `graphics.backend`, else a scan of the executable. A program in a Windows system directory (`system32`, `syswow64`) is scanned without the DLLs beside it, which are Windows' own. The plan's warnings are printed to stderr as `warning:` lines. `--wait` waits for the program, then for the bottle's wineserver.
 
 ```text
 Run a Windows program in a bottle
@@ -214,7 +222,8 @@ Options:
           Upscale with MetalFX where the backend supports it
 
       --retina
-          Render at native Retina resolution
+          Want native Retina resolution. Retina is a bottle setting (`uncork bottle set <bottle>
+          performance.retina=true`); this only warns when the bottle has it off
 
       --wine-debug <CHANNELS>
           Enable Wine debug channels (e.g. `+loaddll,+d3d`); output goes to the launch log
@@ -239,6 +248,8 @@ Options:
 ```
 
 ## uncork inspect
+
+Prints the bitness, the large-address-aware and NX flags, each graphics API with the file that names it, Steamworks and anti-cheat files, the modules without `NX_COMPAT`, and the backend Uncork would choose. Backends are judged as a launch judges them: installed, and loadable by the newest installed Wine (with no Wine installed, by the features of the catalog's recommended one). `Unavailable` says why each backend in the preference order that cannot be used is passed over.
 
 ```text
 Show what a Windows executable is: 32/64-bit, graphics API, recommended backend
@@ -450,6 +461,8 @@ Options:
 
 ## uncork bottle set
 
+Retina mode and the Windows version are also written to the prefix's registry. The registry is updated first and `uncork.toml` is saved only after that worked, so a failed change is retried by running the same command again; the change is refused while the bottle's Wine is not installed. After changing `performance.msync` or `wine`, stop anything running in the bottle with `uncork bottle kill` before the next launch.
+
 ```text
 Change a bottle setting, e.g. `graphics.backend=dxmt`, `performance.retina=true`,
 `env.DXMT_LOG_LEVEL=info`
@@ -489,7 +502,7 @@ Options:
 
 ## uncork bottle import
 
-Clones with APFS (`/bin/cp -c -R`) by default, falling back to a plain copy on volumes without clones. When the prefix has exactly one Windows user other than `Public` and it is not your macOS user name (CrossOver bottles use `crossover`), the bottle's `env` gets `USER` and `LOGNAME` set to it, so Wine keeps using that profile's AppData.
+Clones with APFS (`/bin/cp -c -R`) by default, falling back to a plain copy on volumes without clones. When the prefix has exactly one Windows user other than `Public` and it is not your macOS user name (CrossOver bottles use `crossover`), the bottle's `env` gets `USER` and `LOGNAME` set to it, so Wine keeps using that profile's AppData. A Steam `ActiveProcess` `pid` left in the copy's `user.reg` is reset to 0. A clone carries the original's saved Steam login, and when two copies use one login Steam can ask for a new sign-in in either of them ([STEAM.md](STEAM.md#known-issues)): import with `--move`, or expect to sign in again.
 
 ```text
 Import an existing Wine prefix (CrossOver or Whisky bottle, plain WINEPREFIX)
@@ -512,7 +525,7 @@ Options:
 
 ## uncork bottle kill
 
-Runs `wineserver --kill` for the bottle, then, when Steam is installed in it, resets `HKCU\Software\Valve\Steam\ActiveProcess\pid` to 0 so the next launch does not mistake a killed client for a running one.
+Runs `wineserver --kill` for the bottle, then, when Steam is installed in it, resets `HKCU\Software\Valve\Steam\ActiveProcess\pid` to 0, also when nothing was running, so the next launch does not mistake a killed or crashed client for a running one.
 
 ```text
 Stop every Windows process in a bottle
@@ -550,7 +563,7 @@ Options:
 
 ## uncork bottle tool
 
-Wine tools always run on WineD3D.
+Wine tools always run on WineD3D. The plan's warnings are printed to stderr as `warning:` lines.
 
 ```text
 Open a Wine tool: winecfg, regedit, taskmgr, explorer, cmd, control
@@ -593,6 +606,8 @@ Options:
 
 ## uncork steam install
 
+Finishes a bottle that `bottle create` left incomplete, as `setup` does. Reuses `cache/downloads/SteamSetup.exe` when it has the pinned SHA-256, and skips the installer when the bottle already has `Steam.exe` (in any letter case). Then starts the client with its window visible, on the bottle's DXVK ([STEAM.md](STEAM.md#installing)).
+
 ```text
 Download Valve's installer and install Steam into a bottle
 
@@ -610,7 +625,7 @@ Options:
 
 ## uncork steam start
 
-Starts the client with its window visible. `--backend`, `--hud`, `--metalfx` and `--retina` apply to games, not to the client, which always gets DXVK app-locally ([STEAM.md](STEAM.md#graphics-steam-runs-on-dxvk)). `--env` and `--wine-debug` do apply.
+Starts the client with its window visible. `--backend`, `--hud`, `--metalfx` and `--retina` apply to games, not to the client, which always gets DXVK app-locally: the bottle's `graphics.dxvk` pin, else the newest installed ([STEAM.md](STEAM.md#graphics-steam-runs-on-dxvk)). `--env` and `--wine-debug` do apply. A `pid` left by a client that crashed does not count as a running client when no wineserver runs for the bottle; it is cleared and the client starts.
 
 ```text
 Start the Steam client
@@ -645,7 +660,8 @@ Options:
           Upscale with MetalFX where the backend supports it
 
       --retina
-          Render at native Retina resolution
+          Want native Retina resolution. Retina is a bottle setting (`uncork bottle set <bottle>
+          performance.retina=true`); this only warns when the bottle has it off
 
       --wine-debug <CHANNELS>
           Enable Wine debug channels (e.g. `+loaddll,+d3d`); output goes to the launch log
@@ -687,7 +703,7 @@ Options:
 
 ## uncork steam launch
 
-The same flow as `uncork play <appid>`, with the profile whose `[steam] appid` matches, if any.
+The same flow as `uncork play <appid>`, with the profile whose `[steam] appid` matches, if any. Several profiles with that app id are an error that names them; play one with `uncork play <profile id>`.
 
 ```text
 Launch a Steam game by app id
@@ -729,7 +745,8 @@ Options:
           Upscale with MetalFX where the backend supports it
 
       --retina
-          Render at native Retina resolution
+          Want native Retina resolution. Retina is a bottle setting (`uncork bottle set <bottle>
+          performance.retina=true`); this only warns when the bottle has it off
 
       --wine-debug <CHANNELS>
           Enable Wine debug channels (e.g. `+loaddll,+d3d`); output goes to the launch log
@@ -789,6 +806,8 @@ Options:
 ```
 
 ## uncork profile show
+
+Finds the profile as `uncork play` does; several matches are an error that names them.
 
 ```text
 Show one profile

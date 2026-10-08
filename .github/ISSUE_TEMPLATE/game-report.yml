@@ -33,7 +33,7 @@ body:
     attributes:
       label: Wine runtime
       description: The Wine component the bottle uses, from `uncork runtime list` or `uncork bottle info <bottle>`.
-      placeholder: "wine sikarugir-11.0_1"
+      placeholder: "wine winecx-gptk-4.7.3"
     validations:
       required: true
   - type: input

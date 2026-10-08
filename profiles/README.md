@@ -11,7 +11,7 @@ A game profile is one TOML file that tells Uncork how to run one game well: whic
 
 The file name is the profile id plus `.toml`. A user file that fails to parse is reported, not fatal; the other profiles still load.
 
-`uncork play <query>` and `uncork profile show <query>` find a profile by, in order: exact id; Steam app id (when the query is all digits); exact name, ignoring case; a substring of an id or name, ignoring case, when exactly one profile matches. `uncork play rise-of-nations` works because only one profile id contains `rise-of-nations`.
+`uncork play <query>` and `uncork profile show <query>` find a profile by, in order: exact id; Steam app id (when the query is all digits); exact name, ignoring case; a substring of an id or name, ignoring case. The first of these steps that matches anything decides. One match is used; several are an error that lists the candidate ids, so pick one by its id. `uncork play rise-of-nations` works because only one profile id contains `rise-of-nations`. Two profiles with the same `[steam] appid`, such as a user profile `rise-of-nations-wined3d` next to the built-in one, make `uncork play 287450` and `uncork steam launch 287450` ambiguous; `uncork play rise-of-nations-wined3d` picks one. Only when no profile matches does `uncork play <Steam app id>` start an installed game without a profile.
 
 Settings layer from lowest to highest precedence: the bottle's `uncork.toml`, the profile, then command-line flags (`--backend`, `--hud`, `--metalfx`, `--retina`, `-e KEY=VALUE`). For environment variables and DLL overrides, later layers win per key.
 
@@ -197,7 +197,7 @@ An INI edit is enforced on every launch, so a value changed in the game's own op
 
 | Mode | Behavior | Use for |
 |---|---|---|
-| `direct` | Uncork makes sure the bottle's Steam client is running, then starts `[exe] path` directly in the same prefix with the game's own backend environment | Steam games that run when started directly. The default with `[steam]` |
+| `direct` | Uncork makes sure the bottle's Steam client is running, then starts `[exe] path` directly in the same prefix with the game's own backend environment, plus `SteamAppId` and `SteamGameId` set to `[steam] appid` as Steam sets them for the games it starts (an `[env]` value for either wins) | Steam games that run when started directly. The default with `[steam]` |
 | `applaunch` | Uncork restarts Steam with the game's environment and runs `steam.exe -applaunch <appid> <args>`; the game inherits Steam's environment | Steam games whose DRM must be started by Steam |
 | `standalone` | Uncork starts the executable without Steam | DRM-free and non-Steam games. The default without `[steam]` |
 
