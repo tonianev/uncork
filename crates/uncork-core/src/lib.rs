@@ -16,7 +16,8 @@
 //! | [`graphics`] | Backend choice and per-process activation |
 //! | [`profile`], [`ini`] | Per-game settings |
 //! | [`launch`], [`process`] | Launch plans and running them |
-//! | [`steam`] | Steam client install, startup, game launch |
+//! | [`display`] | The Mac's displays (main display size and refresh rate) |
+//! | [`steam`] | Steam client install, startup, game launch; stopping a bottle |
 //! | [`gamemode`] | macOS Game Mode wrapper bundles (experimental) |
 //! | [`host`] | Host facts and `doctor` checks |
 
@@ -24,6 +25,7 @@ pub mod bottle;
 pub mod catalog;
 pub mod component;
 pub mod config;
+pub mod display;
 pub mod download;
 mod error;
 pub mod gamemode;
