@@ -252,7 +252,7 @@ fn play_dry_run_shows_backend_ini_and_command() {
     assert!(text.contains("Windowed Height=1440 (from "), "{text}");
     let plan = home.json(&["play", "rise", "--dry-run"]);
     assert_eq!(plan["plan"]["frame_cap"]["fps"], 60);
-    assert_eq!(plan["plan"]["display"], "LG UltraFine 2560x1440 @60Hz");
+    assert_eq!(plan["plan"]["display"], "LG UltraFine 2560x1440");
     let width = plan["ini"]
         .as_array()
         .unwrap()
@@ -316,7 +316,7 @@ fn run_restarts_a_bottle_whose_main_display_changed() {
         .stderr(contains("main display changed").not());
     let recorded = fs::read_to_string(&state).unwrap();
     assert!(
-        recorded.contains("session_display = \"Color LCD 1728x1117 @120Hz\""),
+        recorded.contains("session_display = \"Color LCD 1728x1117\""),
         "{recorded}"
     );
 
@@ -336,12 +336,12 @@ fn run_restarts_a_bottle_whose_main_display_changed() {
         .assert()
         .success()
         .stderr(contains(
-            "The main display changed since bottle test1 started (Color LCD 1728x1117 @120Hz → LG UltraFine 2560x1440 @60Hz); restarting the bottle so the program sees the new display",
+            "The main display changed since bottle test1 started (Color LCD 1728x1117 → LG UltraFine 2560x1440); restarting the bottle so the program sees the new display",
         ));
     assert_eq!(kills(&home), before + 1);
     let recorded = fs::read_to_string(&state).unwrap();
     assert!(
-        recorded.contains("session_display = \"LG UltraFine 2560x1440 @60Hz\""),
+        recorded.contains("session_display = \"LG UltraFine 2560x1440\""),
         "{recorded}"
     );
 
@@ -415,7 +415,7 @@ fn play_restarts_a_bottle_for_a_new_display_only_once_the_game_is_planned() {
         .assert()
         .success()
         .stderr(contains(
-            "The main display changed since bottle b started (Color LCD 1728x1117 @120Hz → LG UltraFine 2560x1440 @60Hz); restarting the bottle so the game sees the new display",
+            "The main display changed since bottle b started (Color LCD 1728x1117 → LG UltraFine 2560x1440); restarting the bottle so the game sees the new display",
         ));
     let calls = home.calls();
     let kill = calls
@@ -429,7 +429,7 @@ fn play_restarts_a_bottle_for_a_new_display_only_once_the_game_is_planned() {
     assert!(kill < game, "{calls:#?}");
     let recorded = fs::read_to_string(home.bottle("b").join("uncork-state.toml")).unwrap();
     assert!(
-        recorded.contains("session_display = \"LG UltraFine 2560x1440 @60Hz\""),
+        recorded.contains("session_display = \"LG UltraFine 2560x1440\""),
         "{recorded}"
     );
 }

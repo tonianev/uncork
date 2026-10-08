@@ -81,17 +81,50 @@ impl Display {
             })
     }
 
-    /// What identifies the display setup for a running bottle:
-    /// `<name> <width>x<height> @<Hz>Hz` (`Color LCD 1728x1117 @120Hz`),
-    /// without the refresh rate when it is unknown. A different signature
-    /// means Wine's view of the main display is out of date.
+    /// What identifies the main display for a running bottle:
+    /// `<name> <width>x<height>` (`Color LCD 1728x1117`). A different
+    /// signature means Wine's view of the main display is out of date: the
+    /// display was replaced or its "looks like" size changed. The refresh
+    /// rate is left out: only the frame cap depends on it, and every launch
+    /// reads it anew, so switching a display from 120 to 60 Hz does not
+    /// restart the bottle (and end a game in progress).
     #[must_use]
     pub fn signature(&self) -> String {
         let (width, height) = self.points;
-        match self.refresh_rounded() {
-            Some(hz) => format!("{} {width}x{height} @{hz}Hz", self.name),
-            None => format!("{} {width}x{height}", self.name),
+        format!("{} {width}x{height}", self.name)
+    }
+
+    /// The display for messages: its [`Self::signature`] and refresh rate,
+    /// as precise as reported (`Color LCD 1728x1117 @120Hz`,
+    /// `TV 1920x1080 @59.94Hz`); without the rate when it is unknown.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let signature = self.signature();
+        match self.refresh_hz.filter(|hz| hz.is_finite() && *hz > 0.0) {
+            Some(hz) if (hz - hz.round()).abs() < 0.005 => {
+                format!("{signature} @{}Hz", hz.round())
+            }
+            Some(hz) => format!("{signature} @{hz:.2}Hz"),
+            None => signature,
         }
+    }
+}
+
+/// `recorded`, a session display from `uncork-state.toml`, without the
+/// ` @<Hz>Hz` that signatures had before the refresh rate was left out of
+/// them ([`Display::signature`]), so a bottle that was running then is not
+/// restarted for nothing.
+#[must_use]
+pub fn without_refresh(recorded: &str) -> &str {
+    match recorded.rsplit_once(" @") {
+        Some((signature, rate))
+            if rate
+                .strip_suffix("Hz")
+                .is_some_and(|hz| !hz.is_empty() && hz.bytes().all(|b| b.is_ascii_digit())) =>
+        {
+            signature
+        }
+        _ => recorded,
     }
 }
 
@@ -375,7 +408,8 @@ mod tests {
         let displays = parse(BUILT_IN_ONLY);
         assert_eq!(displays, [built_in()]);
         let main = main_display(&displays).unwrap();
-        assert_eq!(main.signature(), "Color LCD 1728x1117 @120Hz");
+        assert_eq!(main.signature(), "Color LCD 1728x1117");
+        assert_eq!(main.describe(), "Color LCD 1728x1117 @120Hz");
         assert_eq!(main.refresh_rounded(), Some(120));
     }
 
@@ -402,7 +436,8 @@ mod tests {
                 built_in: false,
             }
         );
-        assert_eq!(main.signature(), "LG UltraFine 2560x1440 @60Hz");
+        assert_eq!(main.signature(), "LG UltraFine 2560x1440");
+        assert_eq!(main.describe(), "LG UltraFine 2560x1440 @60Hz");
     }
 
     #[test]
@@ -415,7 +450,8 @@ mod tests {
         assert_eq!(display.refresh_rounded(), Some(60));
         assert_eq!(display.pixels, None);
         assert!(!display.built_in);
-        assert_eq!(display.signature(), "TV 1920x1080 @60Hz");
+        assert_eq!(display.signature(), "TV 1920x1080");
+        assert_eq!(display.describe(), "TV 1920x1080 @59.94Hz");
     }
 
     #[test]
@@ -429,6 +465,7 @@ mod tests {
         assert_eq!(display.refresh_hz, None);
         assert_eq!(display.refresh_rounded(), None);
         assert_eq!(display.signature(), "DELL U2720Q 3840x2160");
+        assert_eq!(display.describe(), "DELL U2720Q 3840x2160");
 
         let named_mode = only(
             r#"{"SPDisplaysDataType":[{"spdisplays_ndrvs":[{"_name":"TV",
@@ -524,7 +561,36 @@ mod tests {
             ..built_in()
         };
         assert_eq!(odd.refresh_rounded(), None);
-        assert_eq!(odd.signature(), "Color LCD 1728x1117");
+        assert_eq!(odd.describe(), "Color LCD 1728x1117");
+    }
+
+    #[test]
+    fn the_signature_leaves_out_the_refresh_rate() {
+        let at_60 = Display {
+            refresh_hz: Some(60.0),
+            ..built_in()
+        };
+        assert_eq!(at_60.signature(), built_in().signature());
+        assert_ne!(at_60.describe(), built_in().describe());
+        let scaled = Display {
+            points: (1512, 982),
+            ..built_in()
+        };
+        assert_ne!(scaled.signature(), built_in().signature());
+
+        // Signatures recorded with a refresh rate compare without it.
+        assert_eq!(
+            without_refresh("Color LCD 1728x1117 @120Hz"),
+            "Color LCD 1728x1117"
+        );
+        for kept in [
+            "Color LCD 1728x1117",
+            "Odd @ name 800x600",
+            "TV 1920x1080 @Hz",
+            "TV 1920x1080 @59.94Hz",
+        ] {
+            assert_eq!(without_refresh(kept), kept);
+        }
     }
 
     #[test]
@@ -534,7 +600,7 @@ mod tests {
         std::fs::write(&file, EXTERNAL_5K_MAIN).unwrap();
         let displays = probe_from(Some(&file));
         assert_eq!(
-            main_display(&displays).unwrap().signature(),
+            main_display(&displays).unwrap().describe(),
             "LG UltraFine 2560x1440 @60Hz"
         );
         assert_eq!(probe_from(Some(&dir.path().join("missing.json"))), []);

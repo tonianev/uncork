@@ -188,7 +188,7 @@ pub struct FrameCap {
     pub fps: Option<u32>,
     /// Where the value comes from, for `--dry-run`: `performance.max_fps in
     /// profile <id>`, `performance.max_fps in bottle <name>`, `the main
-    /// display's refresh rate (<signature>)` or `the default (the main
+    /// display's refresh rate (<display>)` ([`Display::describe`]) or `the default (the main
     /// display's refresh rate is unknown)`.
     pub source: String,
     /// A `DXMT_CONFIG` from the bottle's or the profile's `env` or from
@@ -397,12 +397,11 @@ pub fn plan(
 fn choose_frame_cap(ctx: PlanContext<'_>, performance: &Performance) -> FrameCap {
     let (fps, source) = match &performance.max_fps {
         Some((fps, source)) => (*fps, source.clone()),
-        None => match ctx.display.and_then(|display| {
-            display
-                .refresh_rounded()
-                .map(|hz| (hz, display.signature()))
-        }) {
-            Some((hz, signature)) => (hz, format!("the main display's refresh rate ({signature})")),
+        None => match ctx
+            .display
+            .and_then(|display| display.refresh_rounded().map(|hz| (hz, display.describe())))
+        {
+            Some((hz, display)) => (hz, format!("the main display's refresh rate ({display})")),
             None => (
                 DEFAULT_MAX_FPS,
                 "the default (the main display's refresh rate is unknown)".to_owned(),

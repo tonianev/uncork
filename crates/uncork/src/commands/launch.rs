@@ -743,7 +743,7 @@ mod tests {
                 source: "the main display's refresh rate (Color LCD 1728x1117 @120Hz)".to_owned(),
                 overridden: false,
             }),
-            display: Some("Color LCD 1728x1117 @120Hz".to_owned()),
+            display: Some("Color LCD 1728x1117".to_owned()),
         };
         let edit = |key: &str, value: &str, resolved: Option<&str>| IniEditView {
             file: r"%APPDATA%\G\g.ini".to_owned(),

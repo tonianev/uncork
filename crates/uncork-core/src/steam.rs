@@ -583,9 +583,13 @@ pub struct DisplayChange {
 
 /// Whether the main display has changed since the running Wine session of
 /// `bottle` started: Wine reads the displays when its wineserver starts, so
-/// after a display is plugged in or unplugged, or another display becomes
-/// the main one, a game started in that session sees the old ones (wrong
-/// sizes and offsets). `None` when either signature is unknown (a probe
+/// after another display becomes the main one (often when a display is
+/// plugged in or unplugged) or the main display's "looks like" size
+/// changes, a game started in that session sees the old one (wrong sizes
+/// and offsets). Compares [`Display::signature`]s, which leave out the
+/// refresh rate (a recorded one with a rate is read without it,
+/// [`crate::display::without_refresh`]); a display that is not the main
+/// one does not count. `None` when either signature is unknown (a probe
 /// that failed never triggers a restart), when they are equal, or when no
 /// wineserver runs (the next session starts fresh); only then is the
 /// wineserver asked about.
@@ -598,7 +602,11 @@ pub fn display_change(
     display: Option<&Display>,
 ) -> crate::Result<Option<DisplayChange>> {
     let (Some(before), Some(now)) = (
-        bottle.state.session_display.as_deref(),
+        bottle
+            .state
+            .session_display
+            .as_deref()
+            .map(crate::display::without_refresh),
         display.map(Display::signature),
     ) else {
         return Ok(None);
@@ -1758,11 +1766,11 @@ mod tests {
         assert_eq!(outcome.display_change, None);
         assert_eq!(
             fx.bottle.state.session_display.as_deref(),
-            Some("Color LCD 1728x1117 @120Hz")
+            Some("Color LCD 1728x1117")
         );
         let saved = fs::read_to_string(fx.bottle.path.join(crate::bottle::STATE_FILE)).unwrap();
         assert!(
-            saved.contains("session_display = \"Color LCD 1728x1117 @120Hz\""),
+            saved.contains("session_display = \"Color LCD 1728x1117\""),
             "{saved}"
         );
     }
@@ -1797,8 +1805,8 @@ mod tests {
         outcome.child.take().unwrap().wait().unwrap();
 
         let change = outcome.display_change.unwrap();
-        assert_eq!(change.before, "Color LCD 1728x1117 @120Hz");
-        assert_eq!(change.now, "LG UltraFine 2560x1440 @60Hz");
+        assert_eq!(change.before, "Color LCD 1728x1117");
+        assert_eq!(change.now, "LG UltraFine 2560x1440");
         assert!(outcome.restarted);
         assert!(outcome.started_steam, "Steam started again");
         let shutdown = fx.position("steam.exe -shutdown");
@@ -1812,7 +1820,7 @@ mod tests {
         );
         assert_eq!(
             fx.bottle.state.session_display.as_deref(),
-            Some("LG UltraFine 2560x1440 @60Hz")
+            Some("LG UltraFine 2560x1440")
         );
     }
 

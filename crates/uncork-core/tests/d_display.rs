@@ -47,8 +47,8 @@ fn external() -> Display {
     }
 }
 
-const BUILT_IN: &str = "Color LCD 1728x1117 @120Hz";
-const EXTERNAL: &str = "LG UltraFine 2560x1440 @60Hz";
+const BUILT_IN: &str = "Color LCD 1728x1117";
+const EXTERNAL: &str = "LG UltraFine 2560x1440";
 
 /// A 32-bit D3D11 game like Rise of Nations in its own directory.
 fn ron_like(dir: &Path) -> PathBuf {
@@ -244,6 +244,44 @@ fn a_display_change_needs_known_displays_and_a_running_bottle() {
 }
 
 #[test]
+fn a_new_refresh_rate_alone_is_no_display_change() {
+    let fx = Fixture::new(CX_FEATURES);
+    let mut bottle = fx.bottle("steam", |_| {});
+    fx.flag("server");
+    let at_60 = Display {
+        refresh_hz: Some(60.0),
+        ..built_in()
+    };
+    let change = |bottle: &Bottle, display: &Display| {
+        steam::display_change(bottle, &fx.wine, Some(display)).unwrap()
+    };
+
+    // The built-in display switched from 120 to 60 Hz while Steam ran.
+    bottle.state.session_display = Some(BUILT_IN.to_owned());
+    assert_eq!(change(&bottle, &at_60), None);
+
+    // A session recorded with its refresh rate, as signatures were.
+    bottle.state.session_display = Some("Color LCD 1728x1117 @120Hz".to_owned());
+    assert_eq!(change(&bottle, &built_in()), None);
+    assert_eq!(change(&bottle, &at_60), None);
+    let found = change(&bottle, &external()).unwrap();
+    assert_eq!(
+        (found.before.as_str(), found.now.as_str()),
+        (BUILT_IN, EXTERNAL)
+    );
+
+    // A new "looks like" size is a change.
+    let scaled = Display {
+        points: (1512, 982),
+        ..built_in()
+    };
+    assert_eq!(
+        change(&bottle, &scaled).map(|found| found.now),
+        Some("Color LCD 1512x982".to_owned())
+    );
+}
+
+#[test]
 fn a_launch_that_starts_the_session_records_the_main_display() {
     let fx = Fixture::new(CX_FEATURES);
     fx.dxmt("0.80");
@@ -349,7 +387,7 @@ fn play_restarts_a_bottle_whose_main_display_changed() {
     );
     assert!(
         outcome.plan.warnings.iter().any(|w| w.contains(
-            "the main display changed since bottle steam started (Color LCD 1728x1117 @120Hz → LG UltraFine 2560x1440 @60Hz)"
+            "the main display changed since bottle steam started (Color LCD 1728x1117 → LG UltraFine 2560x1440)"
         )),
         "{:#?}",
         outcome.plan.warnings
