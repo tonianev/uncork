@@ -188,11 +188,15 @@ pub struct FrameCap {
     pub fps: Option<u32>,
     /// Where the value comes from, for `--dry-run`: `performance.max_fps in
     /// profile <id>`, `performance.max_fps in bottle <name>`, `the main
-    /// display's refresh rate (<display>)` ([`Display::describe`]) or `the default (the main
-    /// display's refresh rate is unknown)`.
+    /// display's refresh rate (<display>)` ([`Display::describe`]), `the
+    /// default (the main display's refresh rate is unknown)` or
+    /// `d3d11.preferredMaxFrameRate in DXMT_CONFIG from the bottle, the
+    /// profile or --env`.
     pub source: String,
     /// A `DXMT_CONFIG` from the bottle's or the profile's `env` or from
-    /// `--env` replaces Uncork's, so `fps` does not apply.
+    /// `--env` sets `d3d11.preferredMaxFrameRate` itself: `fps` is its
+    /// value. (One that sets only other options keeps Uncork's cap, which
+    /// is appended to it.)
     pub overridden: bool,
 }
 
@@ -266,7 +270,10 @@ pub struct PlanContext<'a> {
 ///   `performance.max_fps`, else the bottle's, else the main display's
 ///   refresh rate rounded to whole Hz, else [`DEFAULT_MAX_FPS`]; `0` is
 ///   uncapped. An explicit value that does not divide the display's refresh
-///   rate gets a warning (DXMT needs one that does).
+///   rate gets a warning (DXMT needs one that does). A `DXMT_CONFIG` from
+///   the bottle, the profile or `--env` keeps the cap appended to its own
+///   options, unless it sets `d3d11.preferredMaxFrameRate` itself, which
+///   then is the cap ([`FrameCap::overridden`]).
 /// - DXMT's MetalFX swapchain (`--metalfx`, `performance.metalfx`) is left
 ///   off, with a warning, in a bottle with Retina mode on: it would upscale
 ///   to twice the native resolution.
@@ -310,7 +317,7 @@ pub fn plan(
             max_fps: cap.fps,
         },
     )?;
-    let env = launch_env(ctx, options, &activation, performance.avx);
+    let mut env = launch_env(ctx, options, &activation, performance.avx);
     warnings.extend(program_warnings(ctx, &program, backend, &env));
     warnings.extend(setting_warnings(ctx, &performance));
     if metalfx_over_retina {
@@ -320,13 +327,21 @@ pub fn plan(
         ));
     }
     let frame_cap = (backend == Backend::Dxmt).then(|| {
-        if let Some(warning) = cap_warning(ctx, &performance, &cap) {
+        let cap = match keep_frame_cap(&mut env, activation.env.get(DXMT_CONFIG)) {
+            Some(fps) => FrameCap {
+                fps,
+                source: format!(
+                    "{FRAME_RATE_KEY} in DXMT_CONFIG from the bottle, the profile or --env"
+                ),
+                overridden: true,
+            },
+            None => cap,
+        };
+        let explicit = cap.overridden || performance.max_fps.is_some();
+        if let Some(warning) = cap_warning(ctx, &cap, explicit) {
             warnings.push(warning);
         }
-        FrameCap {
-            overridden: env.get(DXMT_CONFIG) != activation.env.get(DXMT_CONFIG),
-            ..cap
-        }
+        cap
     });
     warnings.extend(display_warnings(ctx));
 
@@ -415,10 +430,54 @@ fn choose_frame_cap(ctx: PlanContext<'_>, performance: &Performance) -> FrameCap
     }
 }
 
-/// A warning when an explicit `max_fps` does not divide the main display's
-/// refresh rate.
-fn cap_warning(ctx: PlanContext<'_>, performance: &Performance, cap: &FrameCap) -> Option<String> {
-    performance.max_fps.as_ref()?;
+/// DXMT's frame-rate option.
+const FRAME_RATE_KEY: &str = "d3d11.preferredMaxFrameRate";
+
+/// Keep the frame cap when the bottle, the profile or `--env` set a
+/// `DXMT_CONFIG` of their own, which replaced `ours` (the activation's,
+/// `d3d11.preferredMaxFrameRate=<n>`) in `env`. DXMT reads `;`-separated
+/// `key=value` entries, so `ours` is appended to theirs unless theirs sets
+/// [`FRAME_RATE_KEY`] itself. Returns `Some` with the cap theirs sets
+/// (`None` inside for 0 or a value DXMT cannot read, both uncapped; the
+/// last entry wins, as in DXMT), `None` when Uncork's cap applies.
+fn keep_frame_cap(
+    env: &mut BTreeMap<String, String>,
+    ours: Option<&String>,
+) -> Option<Option<u32>> {
+    let theirs = env.get_mut(DXMT_CONFIG)?;
+    if Some(&*theirs) == ours {
+        return None;
+    }
+    let set = theirs
+        .split(';')
+        .rev()
+        .filter_map(|entry| entry.split_once('='))
+        .find(|(key, _)| key.trim() == FRAME_RATE_KEY)
+        .map(|(_, value)| {
+            value
+                .trim()
+                .trim_matches('"')
+                .parse::<u32>()
+                .ok()
+                .filter(|fps| *fps > 0)
+        });
+    if set.is_none()
+        && let Some(ours) = ours
+    {
+        if !theirs.trim_end().is_empty() && !theirs.trim_end().ends_with(';') {
+            theirs.push(';');
+        }
+        theirs.push_str(ours);
+    }
+    set
+}
+
+/// A warning when an `explicit` cap (from `max_fps` or `DXMT_CONFIG`)
+/// does not divide the main display's refresh rate.
+fn cap_warning(ctx: PlanContext<'_>, cap: &FrameCap, explicit: bool) -> Option<String> {
+    if !explicit {
+        return None;
+    }
     let fps = cap.fps?;
     let hz = ctx.display?.refresh_rounded()?;
     (hz % fps != 0).then(|| {

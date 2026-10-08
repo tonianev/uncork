@@ -550,24 +550,67 @@ fn an_explicit_frame_cap_wins_and_zero_uncaps() {
 }
 
 #[test]
-fn dxmt_config_from_the_user_replaces_the_frame_cap() {
+fn dxmt_config_from_the_user_keeps_the_frame_cap() {
     let fx = Fixture::new(CX_FEATURES);
     fx.dxmt("0.80");
     let bottle = fx.bottle("steam", |_| {});
-    let options = LaunchOptions {
-        env: [(
-            "DXMT_CONFIG".to_owned(),
-            "d3d11.metalSpatialUpscaleFactor=2;".to_owned(),
-        )]
-        .into(),
-        ..LaunchOptions::default()
+    let with = |config: &str| {
+        let options = LaunchOptions {
+            env: [("DXMT_CONFIG".to_owned(), config.to_owned())].into(),
+            ..LaunchOptions::default()
+        };
+        plan_with(&fx, &bottle, None, Some(&built_in()), &options)
     };
-    let plan = plan_with(&fx, &bottle, None, Some(&built_in()), &options);
+
+    // Other options: the cap is appended, as DXMT reads `;`-separated keys.
+    for (theirs, merged) in [
+        (
+            "d3d11.metalSpatialUpscaleFactor=2;",
+            "d3d11.metalSpatialUpscaleFactor=2;d3d11.preferredMaxFrameRate=120",
+        ),
+        (
+            "dxgi.handleAltTab=1",
+            "dxgi.handleAltTab=1;d3d11.preferredMaxFrameRate=120",
+        ),
+        ("", "d3d11.preferredMaxFrameRate=120"),
+    ] {
+        let plan = with(theirs);
+        assert_eq!(dxmt_config(&plan), Some(merged), "{theirs:?}");
+        let cap = plan.frame_cap.unwrap();
+        assert!(!cap.overridden, "{theirs:?}");
+        assert_eq!(cap.fps, Some(120));
+    }
+
+    // Their own cap is kept, and is the plan's.
+    let plan = with("d3d11.preferredMaxFrameRate=30; dxgi.handleAltTab=1");
     assert_eq!(
         dxmt_config(&plan),
-        Some("d3d11.metalSpatialUpscaleFactor=2;")
+        Some("d3d11.preferredMaxFrameRate=30; dxgi.handleAltTab=1")
     );
-    assert!(plan.frame_cap.unwrap().overridden);
+    let cap = plan.frame_cap.unwrap();
+    assert!(cap.overridden);
+    assert_eq!(cap.fps, Some(30));
+    assert_eq!(
+        cap.source,
+        "d3d11.preferredMaxFrameRate in DXMT_CONFIG from the bottle, the profile or --env"
+    );
+    assert!(!plan.warnings.iter().any(|w| w.contains("frame cap")));
+
+    // One that does not divide the refresh rate is warned about.
+    let plan = with("d3d11.preferredMaxFrameRate = 50");
+    assert_eq!(plan.frame_cap.as_ref().unwrap().fps, Some(50));
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|w| w
+                .starts_with("a frame cap of 50 FPS (d3d11.preferredMaxFrameRate in DXMT_CONFIG")),
+        "{:#?}",
+        plan.warnings
+    );
+
+    // 0 uncaps.
+    let plan = with("d3d11.preferredMaxFrameRate=0");
+    assert_eq!(plan.frame_cap.unwrap().fps, None);
 }
 
 #[test]

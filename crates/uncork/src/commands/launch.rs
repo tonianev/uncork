@@ -569,12 +569,8 @@ fn render_dry_run(plan: &LaunchPlan, ini: &[IniEditView]) -> String {
     out
 }
 
-/// `120 FPS (the main display's refresh rate (...))`, `none (...)`, or
-/// that `DXMT_CONFIG` from the environment layers replaces it.
+/// `120 FPS, the main display's refresh rate (...)` or `none, <source>`.
 fn describe_frame_cap(cap: &FrameCap) -> String {
-    if cap.overridden {
-        return "set by DXMT_CONFIG from the bottle, the profile or --env".to_owned();
-    }
     match cap.fps {
         Some(fps) => format!("{fps} FPS, {}", cap.source),
         None => format!("none, {}", cap.source),
@@ -855,22 +851,18 @@ mod tests {
 
     #[test]
     fn frame_caps_say_where_they_come_from() {
-        let cap = |fps, overridden| FrameCap {
+        let cap = |fps| FrameCap {
             fps,
             source: "performance.max_fps in bottle steam".to_owned(),
-            overridden,
+            overridden: false,
         };
         assert_eq!(
-            describe_frame_cap(&cap(Some(60), false)),
+            describe_frame_cap(&cap(Some(60))),
             "60 FPS, performance.max_fps in bottle steam"
         );
         assert_eq!(
-            describe_frame_cap(&cap(None, false)),
+            describe_frame_cap(&cap(None)),
             "none, performance.max_fps in bottle steam"
-        );
-        assert_eq!(
-            describe_frame_cap(&cap(Some(60), true)),
-            "set by DXMT_CONFIG from the bottle, the profile or --env"
         );
     }
 }

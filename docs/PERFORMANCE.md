@@ -119,7 +119,7 @@ DXMT paces frames itself (it turns the Metal layer's display sync off). Without 
 3. the main display's refresh rate, rounded to whole Hz (120 on a MacBook Pro's built-in display, 60 on most external displays), else
 4. 60, when the refresh rate is unknown.
 
-`max_fps = 0` leaves the cap out. `n` must divide the display's refresh rate, so 60 is safe on both 60 and 120 Hz displays; an explicit value that does not divide it gets a plan warning. A `DXMT_CONFIG` in the bottle's or the profile's `env`, or from `-e`, replaces Uncork's. `--dry-run` prints the cap and where it came from. Other backends get no cap from Uncork; D3DMetal has `D3DM_MAX_FPS` (below).
+`max_fps = 0` leaves the cap out. `n` must divide the display's refresh rate, so 60 is safe on both 60 and 120 Hz displays; an explicit value that does not divide it gets a plan warning. A `DXMT_CONFIG` in the bottle's or the profile's `env`, or from `-e`, gets the cap appended to its own options (`dxgi.handleAltTab=1;d3d11.preferredMaxFrameRate=120`), unless it sets `d3d11.preferredMaxFrameRate` itself, which then is the cap. `--dry-run` prints the cap and where it came from. Other backends get no cap from Uncork; D3DMetal has `D3DM_MAX_FPS` (below).
 
 ## Backend knobs
 
@@ -127,7 +127,7 @@ These are not set by default; put them in a profile's `[env]` or pass them with 
 
 | Variable | Effect | Source |
 |---|---|---|
-| `DXMT_CONFIG` | DXMT's own options, `key=value` separated by `;`, for example `d3d11.metalSpatialUpscaleFactor=2`. Replaces the frame cap Uncork sets, so add `d3d11.preferredMaxFrameRate=<n>` to keep one | [DXMT CUSTOMIZATION.md](https://github.com/3Shain/dxmt/blob/main/docs/CUSTOMIZATION.md) |
+| `DXMT_CONFIG` | DXMT's own options, `key=value` separated by `;`, for example `d3d11.metalSpatialUpscaleFactor=2`. Uncork appends its frame cap to them, unless they set `d3d11.preferredMaxFrameRate` themselves | [DXMT CUSTOMIZATION.md](https://github.com/3Shain/dxmt/blob/main/docs/CUSTOMIZATION.md) |
 | `D3DM_MAX_FPS=<n>` | Frame-rate cap in D3DMetal | [GPTK 4.0b2 Read Me](https://github.com/Sikarugir-App/Sikarugir/blob/main/D3DMetal/4.0/Read%20Me.pdf) |
 | `D3DM_SUPPORT_DXR` | DirectX ray tracing in D3DMetal; default off on M1 and M2, on from M3 | same |
 | `D3DM_MTL4=0` | On macOS 27, D3DMetal's Direct3D 12 path uses Metal 4 by default; `0` falls back to Metal 3 | same |
