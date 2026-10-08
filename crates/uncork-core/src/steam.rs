@@ -102,6 +102,11 @@ pub enum LaunchMode {
 /// How often [`ensure_running`] and [`stop`] ask whether the client runs.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long [`ensure_running`] waits for a sign-in before it says so: a
+/// saved login signed in 5 to 8 s after the client started on 2026-10-08,
+/// so a longer wait usually means Steam's window is asking for one.
+const SIGN_IN_HINT_AFTER: Duration = Duration::from_secs(15);
+
 /// How long a running client gets to exit after `-shutdown` whenever Uncork
 /// restarts a bottle ([`play`] in [`LaunchMode::Applaunch`] mode, a changed
 /// main display, a Retina, DPI or Windows-version change) before the bottle
@@ -629,6 +634,11 @@ pub fn display_change(
 /// # Errors
 /// Command errors.
 pub fn forget_client(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<()> {
+    zero_active_value(bottle, wine, "pid")
+}
+
+/// Set the DWORD `name` under `ActiveProcess` to 0 with `wine reg add`.
+fn zero_active_value(bottle: &Bottle, wine: &WineRuntime, name: &str) -> crate::Result<()> {
     let spec = reg_command(
         bottle,
         wine,
@@ -636,7 +646,7 @@ pub fn forget_client(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<()> {
             "add",
             client::ACTIVE_PROCESS_KEY,
             "/v",
-            "pid",
+            name,
             "/t",
             "REG_DWORD",
             "/d",
@@ -963,6 +973,10 @@ fn start_if_needed(
         if !status.server {
             bottle.record_session_display(display.map(Display::signature).as_deref());
         }
+        // The client keeps the last session's ActiveUser until it is a few
+        // seconds into starting, after it has set its pid; clear it so
+        // `wait_until_signed_in` cannot mistake it for this session's log-on.
+        zero_active_value(bottle, wine, client::ACTIVE_USER_VALUE)?;
         reap_in_background(crate::process::spawn(&spec)?);
         wait_until_running(bottle, wine, timeout, poll, &spec)?;
         true
@@ -981,8 +995,11 @@ fn start_if_needed(
 /// Steam user: Rise of Nations then quits and crashes in its exit code
 /// (`SteamAuthentication::CancelSteamAuthTicket` on a null pointer, seen
 /// 2026-10-08 when it started 5 s after Steam and 7 s before Steam logged
-/// on). Returns `true` if it had to wait, `false` when the account was
-/// already signed in or Steam records none.
+/// on). Steam sets `ActiveUser` right after it logs on (`[Logged On` in
+/// `logs/connection_log.txt`), so [`start_if_needed`] zeroes the previous
+/// session's value before starting the client. Returns `true` if it had to
+/// wait, `false` when the account was already signed in or Steam records
+/// none.
 ///
 /// # Errors
 /// [`crate::Error::Command`] when nobody signs in within `timeout`.
@@ -992,19 +1009,28 @@ fn wait_until_signed_in(
     timeout: Duration,
     poll: Duration,
 ) -> crate::Result<bool> {
-    let deadline = Instant::now().checked_add(timeout);
+    let began = Instant::now();
+    let deadline = began.checked_add(timeout);
     let mut waited = false;
+    let mut hinted = false;
     loop {
         match active_user(bottle, wine)? {
             Some(0) => {}
             None | Some(_) => return Ok(waited),
         }
         if !waited {
-            tracing::warn!(
-                "waiting for Steam to sign in to your account in bottle {} (if a Steam window asks, sign in there)",
+            tracing::info!(
+                "waiting for Steam to sign in in bottle {}",
                 bottle.config.name
             );
             waited = true;
+        }
+        if !hinted && began.elapsed() >= SIGN_IN_HINT_AFTER {
+            tracing::warn!(
+                "still waiting for Steam to sign in to your account in bottle {} (if a Steam window asks, sign in there)",
+                bottle.config.name
+            );
+            hinted = true;
         }
         let left = deadline.map_or(poll, |deadline| {
             deadline.saturating_duration_since(Instant::now())
@@ -2487,6 +2513,37 @@ mod tests {
             active_user(&fx.bottle, &fx.wine).unwrap(),
             Some(0x1a94_98de)
         );
+    }
+
+    #[test]
+    fn the_last_sessions_account_is_not_taken_for_a_log_on() {
+        // Seen 2026-10-08: Steam sets its pid at once but keeps the last
+        // session's ActiveUser for a few seconds before zeroing it, so a
+        // stale account let Rise of Nations start 6 s before the log-on.
+        let fx = Fixture::new();
+        fx.install_steam();
+        fx.flag("slow-signin");
+        fs::write(fx.state.join("user"), "0x1a9498de").unwrap();
+        let mut fx = fx;
+        let started = start_if_needed(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            None,
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        assert!(started);
+        let calls = fx.calls();
+        let cleared = fx.position("/v ActiveUser /t REG_DWORD /d 0 /f |");
+        let start = fx.position("steam.exe -silent -nofriendsui |");
+        assert!(cleared < start, "{calls:#?}");
+        let queries = calls
+            .iter()
+            .filter(|call| call.contains("/v ActiveUser |"))
+            .count();
+        assert_eq!(queries, 2, "waited for the log-on: {calls:#?}");
     }
 
     #[test]
