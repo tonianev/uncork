@@ -206,6 +206,18 @@ fn steam_start_dry_run_prints_the_client_command() {
 }
 
 #[test]
+fn steam_start_starts_a_client_that_crashed() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_bottle("b", FAKE_WINE);
+    home.install_fake_steam("b", &[]);
+    home.fake_crashed_steam();
+    let text = home.stdout(&["steam", "start", "-b", "b"]);
+    assert!(text.contains("Started Steam in bottle b (pid "), "{text}");
+    assert!(!text.contains("already running"), "{text}");
+}
+
+#[test]
 fn steam_start_needs_steam() {
     let home = Home::new();
     home.install_fake_wine();

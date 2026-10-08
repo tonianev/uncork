@@ -611,26 +611,28 @@ fn import(ctx: &Ctx, source: &Path, name: Option<&str>, move_: bool) -> anyhow::
 fn kill(ctx: &Ctx, name: &str) -> anyhow::Result<ExitCode> {
     let bottle = Bottle::open_named(&ctx.layout, name)?;
     let wine = bottle_wine(&ctx.layout, &bottle)?;
-    match uncork_core::process::run(&launch::in_bottle(
+    let stopped = match uncork_core::process::run(&launch::in_bottle(
         wine.kill_command(bottle.prefix()),
         &bottle,
         &wine,
     )) {
-        Ok(()) => {
-            // A killed Steam client leaves its pid in the registry, which
-            // would make `uncork play` think Steam is still running.
-            if uncork_steam::SteamInstall::find(bottle.prefix()).is_some()
-                && let Err(err) = uncork_core::steam::forget_client(&bottle, &wine)
-            {
-                tracing::warn!("cannot reset Steam's running marker: {err}");
-            }
-            println!("Stopped every Windows process in bottle {name}.");
-        }
+        Ok(()) => true,
         // wineserver exits non-zero when there was nothing to stop.
-        Err(uncork_core::Error::Command { status, .. }) if status.starts_with("exited") => {
-            println!("Nothing was running in bottle {name}.");
-        }
+        Err(uncork_core::Error::Command { status, .. }) if status.starts_with("exited") => false,
         Err(err) => return Err(err).context(format!("cannot stop bottle {name}")),
+    };
+    // Nothing runs in the bottle now. A Steam client that was killed, here
+    // or earlier (a crash, a force quit), left its pid in the registry,
+    // which would make `uncork play` think Steam is still running.
+    if uncork_steam::SteamInstall::find(bottle.prefix()).is_some()
+        && let Err(err) = uncork_core::steam::forget_client(&bottle, &wine)
+    {
+        tracing::warn!("cannot reset Steam's running marker: {err}");
+    }
+    if stopped {
+        println!("Stopped every Windows process in bottle {name}.");
+    } else {
+        println!("Nothing was running in bottle {name}.");
     }
     Ok(ExitCode::SUCCESS)
 }

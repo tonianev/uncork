@@ -313,6 +313,27 @@ fn bottle_tool_rejects_unknown_tools() {
 }
 
 #[test]
+fn bottle_kill_clears_a_crashed_steam_clients_pid_when_nothing_runs() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_bottle("steam", FAKE_WINE);
+    home.install_fake_steam("steam", &[]);
+    home.fake_crashed_steam();
+    home.uncork()
+        .args(["bottle", "kill", "steam"])
+        .assert()
+        .success()
+        .stdout("Nothing was running in bottle steam.\n");
+    assert!(
+        home.calls().iter().any(|call| call.starts_with(
+            r"wine reg add HKCU\Software\Valve\Steam\ActiveProcess /v pid /t REG_DWORD /d 0 /f |"
+        )),
+        "{:#?}",
+        home.calls()
+    );
+}
+
+#[test]
 fn bottle_kill_reports_an_uninstalled_wine() {
     let home = Home::new();
     home.write_bottle("b", "11.0-gone");

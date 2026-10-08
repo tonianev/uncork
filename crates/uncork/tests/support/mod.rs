@@ -162,6 +162,34 @@ exit 0
         dir
     }
 
+    /// Replace the fake Wine's `bin/wine` and `bin/wineserver` with ones
+    /// that act out a Steam client that crashed: `reg query` reports its
+    /// pid (0x274, or 0 once `reg add` cleared it), but no wineserver runs
+    /// (`wineserver -k0` and `--kill` exit 1). Every call is still recorded.
+    pub fn fake_crashed_steam(&self) {
+        let dir = self.root().join("components/wine").join(FAKE_WINE);
+        let calls = self.calls_file();
+        let calls = calls.to_str().unwrap();
+        let pid = self.path().join("steam-pid");
+        let pid = pid.to_str().unwrap();
+        fs::write(pid, "0x274").unwrap();
+        let wine = format!(
+            r#"#!/bin/sh
+printf 'wine %s | WINEPREFIX=%s USER=%s\n' "$*" "$WINEPREFIX" "$USER" >> '{calls}'
+case "$1 $2" in
+    "reg query") printf '    pid    REG_DWORD    %s\r\n' "$(cat '{pid}')"; exit 0 ;;
+    "reg add") printf '0x0' > '{pid}'; exit 0 ;;
+esac
+exit 0
+"#
+        );
+        let wineserver = format!(
+            "#!/bin/sh\nprintf 'wineserver %s | WINEPREFIX=%s\\n' \"$*\" \"$WINEPREFIX\" >> '{calls}'\nexit 1\n"
+        );
+        write_script(&dir.join("bin/wine"), &wine);
+        write_script(&dir.join("bin/wineserver"), &wineserver);
+    }
+
     fn calls_file(&self) -> PathBuf {
         self.path().join("calls.log")
     }

@@ -198,6 +198,20 @@ impl Fixture {
         fs::write(self.state.join("pid"), value).unwrap();
     }
 
+    /// A running Steam client: its pid in the registry and a wineserver
+    /// for the prefix.
+    pub fn steam_running(&self) {
+        self.set_pid("0x274");
+        self.flag("server");
+    }
+
+    /// A Steam client that crashed (or was force-quit): its pid is still in
+    /// the registry, but no wineserver runs for the prefix.
+    pub fn steam_crashed(&self) {
+        self.set_pid("0x274");
+        let _ = fs::remove_file(self.state.join("server"));
+    }
+
     pub fn pid(&self) -> Option<String> {
         fs::read_to_string(self.state.join("pid")).ok()
     }

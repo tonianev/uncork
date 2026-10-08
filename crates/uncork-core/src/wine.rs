@@ -126,6 +126,17 @@ impl WineRuntime {
             .arg("--kill")
     }
 
+    /// `wineserver -k0`: asks, without starting or stopping anything,
+    /// whether a wineserver runs for `prefix`. Exits 0 when one does and 1
+    /// when none does. Wine sends signal 0 to the process holding the
+    /// prefix's server lock (`kill_lock_owner` in Wine's `server/request.c`,
+    /// the same lookup `wineserver --kill` uses), so a server that was killed
+    /// or crashed does not count.
+    #[must_use]
+    pub fn server_probe_command(&self, prefix: &Path) -> CommandSpec {
+        self.base_command(&self.wineserver_bin(), prefix).arg("-k0")
+    }
+
     /// `wine regedit /S <C:\windows\temp\file.reg>`.
     #[must_use]
     pub fn regedit_import_command(&self, prefix: &Path, windows_path: &str) -> CommandSpec {
@@ -328,7 +339,8 @@ mod tests {
         let wine = runtime(Path::new("/rt"));
         let wait = wine.wait_command(Path::new("/b/x"));
         let kill = wine.kill_command(Path::new("/b/x"));
-        for (spec, flag) in [(&wait, "--wait"), (&kill, "--kill")] {
+        let probe = wine.server_probe_command(Path::new("/b/x"));
+        for (spec, flag) in [(&wait, "--wait"), (&kill, "--kill"), (&probe, "-k0")] {
             assert_eq!(spec.program, Path::new("/rt/bin/wineserver"));
             assert_eq!(spec.args, [OsString::from(flag)]);
             assert_eq!(spec.env["WINEPREFIX"], "/b/x");

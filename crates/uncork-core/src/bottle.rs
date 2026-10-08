@@ -738,6 +738,11 @@ pub enum ImportMode {
 /// (CrossOver bottles use `crossover`), the bottle's `env` sets `USER` and
 /// `LOGNAME` to it so Wine keeps using that profile.
 ///
+/// A Steam client that was running in the source (a CrossOver bottle copied
+/// while Steam ran) left its `ActiveProcess` pid in the copy's `user.reg`;
+/// it is set to 0 ([`crate::steam`] would otherwise take the copy's Steam
+/// for running). A failure to do so is only logged.
+///
 /// # Errors
 /// [`crate::Error::NotFound`] when `source` is not a prefix,
 /// [`crate::Error::AlreadyExists`], or I/O / command errors.
@@ -790,6 +795,11 @@ pub fn import(
         }
     }
     write_toml_atomic(&dest.join(CONFIG_FILE), &config)?;
+    match crate::steam::forget_client_on_disk(&dest) {
+        Ok(true) => tracing::info!("cleared the Steam client pid the source prefix left behind"),
+        Ok(false) => {}
+        Err(err) => tracing::warn!("cannot clear Steam's running marker in {name}: {err}"),
+    }
     // Keeps an `uncork-state.toml` that came with the prefix: it still
     // describes the files that were copied along with it.
     Bottle::open(&dest)
@@ -1685,6 +1695,27 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
             "cloning leaves the original"
         );
         assert!(!source.join(CONFIG_FILE).exists());
+    }
+
+    #[test]
+    fn import_clears_a_steam_pid_left_in_the_copy() {
+        let (dir, layout) = home();
+        let source = dir.path().join("CrossOver Steam");
+        fake_prefix(&source);
+        let running = "WINE REGISTRY Version 2\n\n[Software\\\\Valve\\\\Steam\\\\ActiveProcess] 1\n\"pid\"=dword:00000274\n";
+        write(&source.join("user.reg"), running);
+
+        let bottle = import(&layout, &source, "cx", "11.0", ImportMode::Clone).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(bottle.path.join("user.reg")).unwrap(),
+            running.replace("dword:00000274", "dword:00000000")
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("user.reg")).unwrap(),
+            running,
+            "the original is untouched"
+        );
     }
 
     #[test]

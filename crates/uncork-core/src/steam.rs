@@ -55,7 +55,10 @@
 //! [`is_running`] reads the `ActiveProcess` `pid`, which the client sets on
 //! start and clears on a clean exit. A client that was killed leaves its
 //! pid behind; [`stop`] clears it after killing ([`forget_client`]), and
-//! anything else that kills a bottle's processes should do the same.
+//! anything else that kills a bottle's processes should do the same. A pid
+//! found while no wineserver runs for the prefix (the client crashed, was
+//! force-quit, or the Mac restarted) is stale: [`is_running`] clears it
+//! and reports the client as not running.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -513,7 +516,7 @@ pub fn forget_client(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<()> {
             "/f",
         ],
     );
-    let output = quiet_output(&spec)?;
+    let output = quiet_output(&spec, "wine")?;
     if output.status.success() {
         Ok(())
     } else {
@@ -525,41 +528,181 @@ pub fn forget_client(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<()> {
     }
 }
 
+/// `HKCU\Software\Valve\Steam\ActiveProcess` as a section name of
+/// `user.reg` (relative to `HKEY_CURRENT_USER`, backslashes doubled).
+const ACTIVE_PROCESS_SECTION: &[u8] = br"Software\\Valve\\Steam\\ActiveProcess";
+
+/// [`forget_client`] without Wine, for a prefix no wineserver runs for (a
+/// bottle just imported): set the `ActiveProcess` `pid` in the prefix's
+/// `user.reg` to `dword:00000000` by editing the file. Returns whether it
+/// changed. A missing `user.reg`, section or value is left alone; the rest
+/// of the file is kept byte for byte.
+///
+/// # Errors
+/// [`crate::Error::Io`] when `user.reg` exists but cannot be read or written.
+pub(crate) fn forget_client_on_disk(prefix: &Path) -> crate::Result<bool> {
+    let path = prefix.join("user.reg");
+    let text = match fs::read(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(Error::io("cannot read", &path, err)),
+    };
+    match zero_active_pid(&text) {
+        Some(edited) => {
+            crate::config::write_atomic(&path, &edited)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// `user.reg` text with a non-zero `ActiveProcess` `pid` set to 0, or
+/// `None` when there is nothing to change.
+fn zero_active_pid(text: &[u8]) -> Option<Vec<u8>> {
+    const PID: &[u8] = b"\"pid\"=";
+    const ZERO: &[u8] = b"dword:00000000";
+    let mut out = Vec::with_capacity(text.len());
+    let mut in_section = false;
+    let mut changed = false;
+    for line in text.split_inclusive(|byte| *byte == b'\n') {
+        let content = line.trim_ascii_end();
+        if let Some(header) = content.strip_prefix(b"[") {
+            in_section = header
+                .split(|byte| *byte == b']')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case(ACTIVE_PROCESS_SECTION));
+        } else if in_section
+            && content.len() >= PID.len()
+            && content[..PID.len()].eq_ignore_ascii_case(PID)
+            && !content[PID.len()..].eq_ignore_ascii_case(ZERO)
+        {
+            out.extend_from_slice(PID);
+            out.extend_from_slice(ZERO);
+            out.extend_from_slice(&line[content.len()..]);
+            changed = true;
+            continue;
+        }
+        out.extend_from_slice(line);
+    }
+    changed.then_some(out)
+}
+
 /// Is a Steam client running in this bottle? Reads
 /// `HKCU\Software\Valve\Steam\ActiveProcess\pid` with `wine reg query`
 /// (non-zero means running) — authoritative because `user.reg` on disk is
 /// flushed lazily.
 ///
-/// The query runs with the bottle's environment (so a wineserver it starts
-/// has the bottle's msync setting) and its output is captured, not shown.
-/// `reg` exiting with status 1 means the key or value does not exist.
+/// A non-zero pid is trusted only when a wineserver was already running for
+/// the prefix before the query (asked with
+/// [`WineRuntime::server_probe_command`] first, since the query itself
+/// starts one): a client that crashed, was force-quit or did not survive a
+/// restart of the Mac leaves its pid behind, and with no wineserver no
+/// client can be running. Such a stale pid is cleared ([`forget_client`])
+/// and reported as not running.
+///
+/// The commands run with the bottle's environment (so a wineserver they
+/// start has the bottle's msync setting) and their output is captured, not
+/// shown. `reg` exiting with status 1 after printing its own `reg: ...`
+/// message (`reg: Unable to find the specified registry key`, translated
+/// in other languages) means the key or value does not exist.
 ///
 /// # Errors
-/// Command errors other than "key not found" (which means not running).
+/// Command errors other than "key not found" (which means not running). A
+/// Wine client that exits without `reg`'s message (for example because its
+/// msync setting differs from the running wineserver's) is an error whose
+/// message includes its output and suggests `uncork bottle kill <bottle>`.
 pub fn is_running(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<bool> {
+    // Asked before the query, which starts a wineserver of its own.
+    let server = server_running(bottle, wine)?;
+    let Some(pid) = active_pid(bottle, wine)? else {
+        return Ok(false);
+    };
+    if pid == 0 {
+        return Ok(false);
+    }
+    if server {
+        return Ok(true);
+    }
+    tracing::info!(
+        "Steam's ActiveProcess pid {pid:#x} in bottle {} is left over from a client that did not exit cleanly (no wineserver was running); clearing it",
+        bottle.config.name
+    );
+    if let Err(err) = forget_client(bottle, wine) {
+        tracing::warn!(
+            "cannot clear Steam's stale running marker in bottle {}: {err}",
+            bottle.config.name
+        );
+    }
+    Ok(false)
+}
+
+/// Whether a wineserver runs for `bottle` ([`WineRuntime::server_probe_command`]).
+/// An exit status other than 0 or 1 means the answer is unknown, which
+/// counts as running, so a pid is never thrown away on a guess.
+fn server_running(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<bool> {
+    let spec = crate::launch::in_bottle(wine.server_probe_command(bottle.prefix()), bottle, wine);
+    let output = quiet_output(&spec, "wineserver")?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => {
+            tracing::debug!(
+                "wineserver -k0 for bottle {} {}; assuming a wineserver runs",
+                bottle.config.name,
+                describe_exit(output.status)
+            );
+            Ok(true)
+        }
+    }
+}
+
+/// The `ActiveProcess` pid, or `None` when the key or value does not exist
+/// (see [`is_running`]).
+fn active_pid(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<Option<u32>> {
     let spec = reg_command(
         bottle,
         wine,
         &["query", client::ACTIVE_PROCESS_KEY, "/v", "pid"],
     );
-    let output = quiet_output(&spec)?;
+    let output = quiet_output(&spec, "wine")?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return Ok(client::parse_active_pid(&stdout).is_some_and(|pid| pid != 0));
+        return Ok(client::parse_active_pid(&stdout));
     }
-    if output.status.code() == Some(REG_NOT_FOUND) {
+    if output.status.code() == Some(REG_NOT_FOUND) && is_reg_message(&stderr) {
         tracing::debug!(
             "no Steam ActiveProcess in bottle {}: {}",
             bottle.config.name,
-            String::from_utf8_lossy(&output.stderr).trim()
+            stderr.trim()
         );
-        return Ok(false);
+        return Ok(None);
     }
+    let printed = stderr.trim();
     Err(Error::Command {
         program: "wine reg query".to_owned(),
-        status: describe_exit(output.status),
+        status: format!(
+            "{} ({}); if the bottle's Wine or msync setting changed while it was running, restart it with `uncork bottle kill {}`",
+            describe_exit(output.status),
+            if printed.is_empty() {
+                "no output".to_owned()
+            } else {
+                format!("output: {printed}")
+            },
+            bottle.config.name
+        ),
         log_hint: String::new(),
     })
+}
+
+/// `true` when `stderr` holds one of `reg`'s own messages. Wine's `reg`
+/// starts every message with `reg: `, in every translation
+/// (`reg: Unable to find the specified registry key`, `reg: Der angegebene
+/// Schlüssel wurde nicht gefunden`).
+fn is_reg_message(stderr: &str) -> bool {
+    stderr
+        .lines()
+        .any(|line| line.trim_start().starts_with("reg:"))
 }
 
 /// `wine reg <args>` with the bottle's environment.
@@ -581,15 +724,16 @@ fn tool_env(bottle: &Bottle, wine: &WineRuntime) -> BTreeMap<String, String> {
 }
 
 /// Run `spec` to completion with stdout and stderr captured (Wine prints
-/// status lines such as `msync: up and running.` to stderr).
-fn quiet_output(spec: &CommandSpec) -> crate::Result<Output> {
+/// status lines such as `msync: up and running.` to stderr); `program`
+/// names it in errors.
+fn quiet_output(spec: &CommandSpec, program: &str) -> crate::Result<Output> {
     spec.to_command()?
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .map_err(|err| Error::Command {
-            program: "wine".to_owned(),
+            program: program.to_owned(),
             status: format!("could not start: {err}"),
             log_hint: String::new(),
         })
@@ -1280,6 +1424,7 @@ mod tests {
         fx.add_game();
         let components = fx.dxmt();
         fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fx.flag("server");
         fx.flag("shutdown-works");
         let profile = applaunch_profile("dxmt");
         let args = ["-x".to_owned()];
@@ -1540,6 +1685,7 @@ mod tests {
         let fx = Fixture::new();
         fx.install_steam();
         fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fx.flag("server");
         fx.flag("shutdown-works");
         stop_with(
             &fx.bottle,
@@ -1556,10 +1702,82 @@ mod tests {
             "{calls:#?}"
         );
         assert!(
-            !calls.iter().any(|call| call.starts_with("wineserver")),
+            !calls
+                .iter()
+                .any(|call| call.starts_with("wineserver --kill")),
             "{calls:#?}"
         );
         assert_eq!(fx.pid().as_deref(), Some("0x0"));
+    }
+
+    #[test]
+    fn a_crashed_client_is_started_again_after_its_pid_is_cleared() {
+        let fx = Fixture::new();
+        fx.install_steam();
+        // The pid of a client that crashed; its wineserver has exited.
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        let started = start_if_needed(
+            &fx.layout,
+            &fx.bottle,
+            &fx.wine,
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        assert!(started, "a stale pid does not count as a running client");
+        let forget = fx.position(r"wine reg add HKCU\Software\Valve\Steam\ActiveProcess /v pid");
+        let start = fx.position("steam.exe -silent -nofriendsui |");
+        assert!(forget < start, "{:#?}", fx.calls());
+    }
+
+    #[test]
+    fn a_left_over_pid_in_user_reg_is_zeroed() {
+        let text = b"WINE REGISTRY Version 2\r\n\
+[Software\\\\Valve\\\\Steam] 1759860000\r\n\
+\"pid\"=dword:00000111\r\n\
+\r\n\
+[Software\\\\Valve\\\\Steam\\\\ActiveProcess] 1759860000\r\n\
+#time=1dc37c5c8d0e3a4\r\n\
+\"ActiveUser\"=dword:00000000\r\n\
+\"pid\"=dword:00000274\r\n\
+\"SteamClientDll\"=\"C:\\\\Program Files (x86)\\\\Steam\\\\steamclient.dll\"\r\n";
+        let edited = zero_active_pid(text).expect("changed");
+        let expected = String::from_utf8_lossy(text)
+            .replace("\"pid\"=dword:00000274", "\"pid\"=dword:00000000");
+        assert_eq!(String::from_utf8_lossy(&edited), expected);
+        assert_eq!(zero_active_pid(&edited), None, "already zero");
+        assert_eq!(zero_active_pid(b"WINE REGISTRY Version 2\n"), None);
+    }
+
+    #[test]
+    fn forgetting_on_disk_edits_only_user_reg() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!forget_client_on_disk(dir.path()).unwrap(), "no user.reg");
+        let user_reg = dir.path().join("user.reg");
+        fs::write(
+            &user_reg,
+            "[Software\\\\Valve\\\\Steam\\\\ActiveProcess] 1\n\"pid\"=dword:00000274\n",
+        )
+        .unwrap();
+        assert!(forget_client_on_disk(dir.path()).unwrap());
+        assert_eq!(
+            fs::read_to_string(&user_reg).unwrap(),
+            "[Software\\\\Valve\\\\Steam\\\\ActiveProcess] 1\n\"pid\"=dword:00000000\n"
+        );
+    }
+
+    #[test]
+    fn regs_messages_are_recognized_in_any_language() {
+        for stderr in [
+            "reg: Unable to find the specified registry key\n",
+            "reg: Unable to find the specified registry value\r\n",
+            "msync: up and running.\nreg: Der angegebene Schlüssel wurde nicht gefunden\n",
+        ] {
+            assert!(is_reg_message(stderr), "{stderr:?}");
+        }
+        for stderr in ["", "\n", "wine client error:0: version mismatch\n"] {
+            assert!(!is_reg_message(stderr), "{stderr:?}");
+        }
     }
 
     #[test]

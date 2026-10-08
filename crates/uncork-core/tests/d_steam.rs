@@ -231,6 +231,7 @@ fn is_running_reads_the_active_process_pid() {
         !is_running(&bottle, &fx.wine).unwrap(),
         "no key: not running"
     );
+    fx.flag("server");
     for (pid, running) in [
         ("0x274", true),
         ("0x0", false),
@@ -242,20 +243,41 @@ fn is_running_reads_the_active_process_pid() {
     }
 
     let calls = fx.calls();
+    let probe = format!("wineserver -k0 | WINEPREFIX={}", bottle.path.display());
     let query = r"wine reg query HKCU\Software\Valve\Steam\ActiveProcess /v pid | cwd=";
+    assert_eq!(calls.len(), 10, "{calls:#?}");
+    for pair in calls.chunks(2) {
+        assert_eq!(pair[0], probe, "the probe comes first: {calls:#?}");
+        assert!(pair[1].starts_with(query), "{calls:#?}");
+    }
     assert!(
-        calls.iter().all(|call| call.starts_with(query)),
-        "{calls:#?}"
-    );
-    assert!(
-        calls[0].contains(&format!("WINEPREFIX={} ", bottle.path.display())),
+        calls[1].contains(&format!("WINEPREFIX={} ", bottle.path.display())),
         "{}",
-        calls[0]
+        calls[1]
     );
     assert!(
-        calls[0].contains(" WINEMSYNC=1 "),
+        calls[1].contains(" WINEMSYNC=1 "),
         "a wineserver the query starts gets the bottle's msync setting: {}",
-        calls[0]
+        calls[1]
+    );
+}
+
+#[test]
+fn a_crashed_clients_pid_is_stale_and_cleared() {
+    let fx = Fixture::new(CX_FEATURES);
+    let bottle = fx.bottle("steam", |_| {});
+    fx.steam_crashed();
+    assert!(!is_running(&bottle, &fx.wine).unwrap());
+    assert_eq!(fx.pid().as_deref(), Some("0x0"), "the stale pid is cleared");
+    let calls = fx.calls();
+    assert_eq!(calls.len(), 3, "{calls:#?}");
+    assert!(calls[0].starts_with("wineserver -k0 |"), "{calls:#?}");
+    assert!(calls[1].starts_with("wine reg query "), "{calls:#?}");
+    assert!(
+        calls[2].starts_with(
+            r"wine reg add HKCU\Software\Valve\Steam\ActiveProcess /v pid /t REG_DWORD /d 0 /f |"
+        ),
+        "{calls:#?}"
     );
 }
 
@@ -265,12 +287,34 @@ fn is_running_reports_other_failures() {
     let bottle = fx.bottle("steam", |_| {});
     fs::write(fx.state.join("reg-exit"), "3").unwrap();
     let err = is_running(&bottle, &fx.wine).unwrap_err();
-    assert_eq!(err.to_string(), "wine reg query exited with status 3");
+    assert_eq!(
+        err.to_string(),
+        "wine reg query exited with status 3 (no output); if the bottle's Wine or msync setting changed while it was running, restart it with `uncork bottle kill steam`"
+    );
 
     let mut broken = fx.wine.clone();
     broken.root = fx.dir.path().join("no-runtime");
     let err = is_running(&bottle, &broken).unwrap_err();
-    assert!(err.to_string().starts_with("wine could not start"), "{err}");
+    assert!(
+        err.to_string().starts_with("wineserver could not start"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_wine_client_that_exits_1_without_regs_message_is_an_error() {
+    // A client whose msync setting differs from the running wineserver's
+    // exits with status 1 and prints nothing; that is not "no Steam".
+    let fx = Fixture::new(CX_FEATURES);
+    let bottle = fx.bottle("steam", |_| {});
+    fs::write(fx.state.join("reg-exit"), "1").unwrap();
+    let err = is_running(&bottle, &fx.wine).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.starts_with("wine reg query exited with status 1 (no output)"),
+        "{message}"
+    );
+    assert!(message.contains("uncork bottle kill steam"), "{message}");
 }
 
 // ----- starting and stopping -----
@@ -281,12 +325,12 @@ fn ensure_running_leaves_a_running_client_alone() {
     let bottle = fx.bottle("steam", |_| {});
     fx.install_steam(&bottle);
     fx.dxvk("1.10.3");
-    fx.set_pid("0x274");
+    fx.steam_running();
     ensure_running(&fx.layout, &bottle, &fx.wine, Duration::from_secs(60)).unwrap();
     assert_eq!(
         fx.calls().len(),
-        1,
-        "one query, no start: {:#?}",
+        2,
+        "one probe and one query, no start: {:#?}",
         fx.calls()
     );
     assert!(
@@ -388,7 +432,7 @@ fn stop_is_a_no_op_when_steam_is_not_running() {
     fx.install_steam(&bottle);
     fx.set_pid("0x0");
     stop(&bottle, &fx.wine, Duration::from_secs(60)).unwrap();
-    assert_eq!(fx.calls().len(), 1, "{:#?}", fx.calls());
+    assert_eq!(fx.calls().len(), 2, "probe and query: {:#?}", fx.calls());
 }
 
 #[test]
@@ -396,7 +440,7 @@ fn stop_kills_the_bottle_when_shutdown_does_not_work_and_forgets_the_client() {
     let fx = Fixture::new(CX_FEATURES);
     let bottle = fx.bottle("steam", |_| {});
     let root = fx.install_steam(&bottle);
-    fx.set_pid("0x274");
+    fx.steam_running();
 
     let started = std::time::Instant::now();
     stop(&bottle, &fx.wine, Duration::from_millis(200)).unwrap();
@@ -726,7 +770,7 @@ fn direct_games_reuse_a_running_client() {
     let components = fx.components();
     let mut bottle = fx.bottle("steam", |_| {});
     let dir = ron_game(&fx, &bottle);
-    fx.set_pid("0x274");
+    fx.steam_running();
 
     let mut outcome = steam::play(
         &fx.layout,
@@ -744,19 +788,20 @@ fn direct_games_reuse_a_running_client() {
     assert!(outcome.child.take().unwrap().wait().unwrap().success());
     assert!(!outcome.started_steam);
     let calls = fx.calls();
-    assert_eq!(calls.len(), 2, "{calls:#?}");
-    assert!(calls[0].starts_with("wine reg query"), "{}", calls[0]);
+    assert_eq!(calls.len(), 3, "{calls:#?}");
+    assert!(calls[0].starts_with("wineserver -k0"), "{}", calls[0]);
+    assert!(calls[1].starts_with("wine reg query"), "{}", calls[1]);
     assert!(
-        calls[1].starts_with(&format!(
+        calls[2].starts_with(&format!(
             "wine {} |",
             dir.join("riseofnations.exe").display()
         )),
         "{}",
-        calls[1]
+        calls[2]
     );
     assert!(
-        calls[1].contains(" DXMT_LOG_LEVEL=none "),
+        calls[2].contains(" DXMT_LOG_LEVEL=none "),
         "auto picked DXMT: {}",
-        calls[1]
+        calls[2]
     );
 }

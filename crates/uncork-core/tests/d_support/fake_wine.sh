@@ -3,6 +3,8 @@
 # @STATE@/calls.log (arguments, working directory and the variables the
 # tests check) and imitates the few Windows programs the tests run.
 # Files in @STATE@ steer it:
+#   server          a wineserver runs for the prefix (every call creates it,
+#                   as a real Wine program starts one; see fake_wineserver.sh)
 #   pid             the ActiveProcess pid `reg query` prints (absent: no key)
 #   reg-exit        exit with this status from `reg query` instead
 #   steam-hangs     `Steam.exe` starts but never registers a pid
@@ -14,6 +16,7 @@ line='wine'
 for arg in "$@"; do line="$line $arg"; done
 line="$line | cwd=$PWD WINEPREFIX=$WINEPREFIX WINEDEBUG=$WINEDEBUG WINEMSYNC=$WINEMSYNC WINEDLLOVERRIDES=$WINEDLLOVERRIDES DXVK_LOG_LEVEL=$DXVK_LOG_LEVEL DXMT_LOG_LEVEL=$DXMT_LOG_LEVEL USER=$USER PATH=$PATH"
 printf '%s\n' "$line" >> "$state/calls.log"
+: > "$state/server"
 case "$1" in
     reg)
         if [ "$2" = add ]; then
