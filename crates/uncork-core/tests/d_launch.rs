@@ -1073,10 +1073,22 @@ fn warns_about_modules_without_nx_compat_in_32_bit_games() {
 fn suggests_large_address_awareness_where_the_runtime_honors_it() {
     let fx = Fixture::new(CX_FEATURES);
     let bottle = fx.bottle("steam", |_| {});
+    let tool = game(
+        fx.dir.path(),
+        "tool",
+        &PeBuilder::pe32().large_address_aware(false),
+    );
+    assert!(
+        warnings_for(&fx, &bottle, &tool, &LaunchOptions::default()).is_empty(),
+        "a program without a graphics API is not a game and gets no hint"
+    );
+
     let exe = game(
         fx.dir.path(),
         "laa",
-        &PeBuilder::pe32().large_address_aware(false),
+        &PeBuilder::pe32()
+            .large_address_aware(false)
+            .import("d3d9.dll"),
     );
     let warnings = warnings_for(&fx, &bottle, &exe, &LaunchOptions::default());
     assert!(

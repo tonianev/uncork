@@ -1104,7 +1104,9 @@ fn program_warnings(
                 scan.non_nx_modules.join(", ")
             ));
         }
+        // Only games need the hint; Windows tools (cmd, winecfg) never do.
         if !scan.info.large_address_aware
+            && scan.primary_api().is_some()
             && ctx.wine.has_feature(FEATURE_LARGE_ADDRESS_AWARE)
             && !env.contains_key(LAA_VAR)
         {

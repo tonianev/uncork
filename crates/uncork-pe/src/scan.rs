@@ -36,6 +36,11 @@ pub(crate) fn scan_game(exe: &Path) -> Result<GameScan, PeError> {
 
     let dir = containing_dir(exe);
     match list_dir(dir) {
+        Ok(entries) if is_system_dir(&entries) => findings.skipped.push((
+            dir.display().to_string(),
+            "a Windows system directory: its DLLs are not the program's own and are not scanned"
+                .to_owned(),
+        )),
         Ok(entries) => findings.add_siblings(&entries, &exe_name, bitness),
         Err(err) => findings.skipped.push((
             dir.display().to_string(),
@@ -226,6 +231,18 @@ fn file_name(path: &Path) -> String {
     )
 }
 
+/// `true` for a Windows system directory (`system32`, `syswow64`): it holds
+/// `ntdll.dll` and `kernel32.dll`, which no game ships. Scanning it would
+/// attribute every graphics DLL Windows has to a program such as `cmd.exe`.
+fn is_system_dir(entries: &[DirEntry]) -> bool {
+    let has = |wanted: &str| {
+        entries
+            .iter()
+            .any(|entry| entry.is_file && entry.name.eq_ignore_ascii_case(wanted))
+    };
+    has("ntdll.dll") && has("kernel32.dll")
+}
+
 fn has_dll_extension(name: &str) -> bool {
     Path::new(name)
         .extension()
@@ -288,6 +305,23 @@ mod tests {
             path: PathBuf::from(name),
             is_file,
         }
+    }
+
+    #[test]
+    fn system_directories_are_recognized_by_ntdll_and_kernel32() {
+        let system = [
+            entry("NTDLL.dll", true),
+            entry("kernel32.dll", true),
+            entry("d3d12.dll", true),
+        ];
+        assert!(is_system_dir(&system));
+        let game = [entry("kernel32.dll", true), entry("d3d11.dll", true)];
+        assert!(!is_system_dir(&game), "both markers are needed");
+        let dirs = [entry("ntdll.dll", false), entry("kernel32.dll", false)];
+        assert!(
+            !is_system_dir(&dirs),
+            "directories named like DLLs do not count"
+        );
     }
 
     #[test]
