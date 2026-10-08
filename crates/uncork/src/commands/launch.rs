@@ -1,6 +1,7 @@
 //! `uncork play`, `uncork run` and `uncork steam launch`.
 
 use std::collections::BTreeMap;
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitCode};
 use std::time::Duration;
@@ -208,15 +209,53 @@ fn restart_if_display_changed(
     Ok(())
 }
 
-/// Say that bottle `bottle` is about to be restarted because the main
-/// display changed (`change`), so the `what` ("game" or "program") sees
-/// the new display; `true` to go ahead.
+/// Whether to restart bottle `bottle` because the main display changed
+/// (`change`), so the `what` ("game" or "program") sees the new display.
+/// The restart quits everything running in the bottle, a game in progress
+/// included, so on a terminal the user is asked (default yes); without one
+/// (a script, a Game Mode bundle) it goes ahead, since the launch would
+/// otherwise see the old display. Says what happens either way.
 fn confirm_display_restart(bottle: &str, change: &DisplayChange, what: &str) -> bool {
-    eprintln!(
-        "The main display changed since bottle {bottle} started ({} → {}); restarting the bottle so the {what} sees the new display",
+    let mut ask = |question: &str| output::confirm(question, true);
+    let ask: Option<&mut dyn FnMut(&str) -> bool> = if std::io::stdin().is_terminal() {
+        Some(&mut ask)
+    } else {
+        None
+    };
+    decide_display_restart(bottle, change, what, ask, &mut |line| eprintln!("{line}"))
+}
+
+/// [`confirm_display_restart`] with the question asked through `ask`
+/// (`None`: nobody to ask) and its lines written through `say`.
+fn decide_display_restart(
+    bottle: &str,
+    change: &DisplayChange,
+    what: &str,
+    ask: Option<&mut dyn FnMut(&str) -> bool>,
+    say: &mut dyn FnMut(&str),
+) -> bool {
+    let changed = format!(
+        "The main display changed since bottle {bottle} started ({} → {})",
         change.before, change.now
     );
-    true
+    let Some(ask) = ask else {
+        say(&format!(
+            "{changed}; restarting the bottle so the {what} sees the new display"
+        ));
+        return true;
+    };
+    say(&format!(
+        "{changed}. The {what} sees the new display only after the bottle restarts, which quits Steam and anything else running in it, a game in progress included."
+    ));
+    if ask(&format!("Restart bottle {bottle} now?")) {
+        say(&format!("Restarting bottle {bottle}."));
+        true
+    } else {
+        say(&format!(
+            "warning: bottle {bottle} keeps running, so the {what} may see the old display (cropped or offset); once nothing in it needs to keep running, run `uncork bottle kill {bottle}` and start the {what} again"
+        ));
+        false
+    }
 }
 
 /// The note after a real launch: macOS does not let a background process
@@ -755,6 +794,63 @@ mod tests {
             "{text}"
         );
         assert_eq!(plan_program(&plan), "game.exe");
+    }
+
+    #[test]
+    fn a_display_restart_is_asked_for_on_a_terminal() {
+        let change = DisplayChange {
+            before: "Color LCD 1728x1117".to_owned(),
+            now: "LG UltraFine 2560x1440".to_owned(),
+        };
+        let decide = |answer: Option<bool>| {
+            let mut lines = Vec::new();
+            let mut questions = Vec::new();
+            let mut ask = |question: &str| {
+                questions.push(question.to_owned());
+                answer.unwrap()
+            };
+            let ask: Option<&mut dyn FnMut(&str) -> bool> = match answer {
+                Some(_) => Some(&mut ask),
+                None => None,
+            };
+            let restart = decide_display_restart("steam", &change, "game", ask, &mut |line| {
+                lines.push(line.to_owned());
+            });
+            (restart, questions, lines)
+        };
+
+        // Nobody to ask: restart, saying so.
+        let (restart, questions, lines) = decide(None);
+        assert!(restart);
+        assert!(questions.is_empty());
+        assert_eq!(
+            lines,
+            [
+                "The main display changed since bottle steam started (Color LCD 1728x1117 → LG UltraFine 2560x1440); restarting the bottle so the game sees the new display"
+            ]
+        );
+
+        // Asked: yes restarts.
+        let (restart, questions, lines) = decide(Some(true));
+        assert!(restart);
+        assert_eq!(questions, ["Restart bottle steam now?"]);
+        assert!(
+            lines[0].ends_with(
+                "which quits Steam and anything else running in it, a game in progress included."
+            ),
+            "{lines:?}"
+        );
+        assert_eq!(lines[1], "Restarting bottle steam.");
+
+        // No leaves the bottle running and says how to restart it later.
+        let (restart, _, lines) = decide(Some(false));
+        assert!(!restart);
+        assert!(
+            lines[1].starts_with(
+                "warning: bottle steam keeps running, so the game may see the old display"
+            ) && lines[1].contains("`uncork bottle kill steam`"),
+            "{lines:?}"
+        );
     }
 
     #[test]
