@@ -92,7 +92,7 @@ Never used: `steamwebhelper.exe` wrappers or renames, `Steam.cfg` update inhibit
 
 ## Launch modes
 
-A profile's `[launch] mode` chooses how a game starts; without a profile, `uncork play <appid>` uses `direct`. In every mode the profile's INI edits are applied first, and only to files that already exist. Before that, a running bottle whose main display has changed since its Wine session started is stopped (the client gets `-shutdown` and 15 s, as below), because Wine reads the displays only when its wineserver starts; the client then starts again with the game ([ARCHITECTURE.md](ARCHITECTURE.md#the-main-display)).
+A profile's `[launch] mode` chooses how a game starts; without a profile, `uncork play <appid>` uses `direct`. In every mode the profile's INI edits are applied first, and only to files that already exist. Before that, once the game is found and its launch planned, a running bottle whose main display has changed since its Wine session started is stopped (the client gets `-shutdown` and 15 s, as below), because Wine reads the displays only when its wineserver starts; the client then starts again with the game ([ARCHITECTURE.md](ARCHITECTURE.md#the-main-display)).
 
 | Mode | What Uncork does | When |
 |---|---|---|

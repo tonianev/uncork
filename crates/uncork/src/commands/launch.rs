@@ -13,7 +13,7 @@ use uncork_core::graphics::{Backend, BackendChoice, Strategy};
 use uncork_core::launch::{self, FrameCap, LaunchOptions, LaunchPlan, PlanContext, Target};
 use uncork_core::process::CommandSpec;
 use uncork_core::profile::{GameProfile, Lookup};
-use uncork_core::steam::{LaunchMode, PlayOutcome};
+use uncork_core::steam::{DisplayChange, LaunchMode, PlayOutcome};
 use uncork_core::wine::WineRuntime;
 
 use super::{Ctx, bottle_wine, is_env_name};
@@ -150,8 +150,8 @@ pub(super) fn play_steam_game(
             "Starting {game} in bottle {} (Steam starts first if needed; that can take a minute)",
             bottle.config.name
         );
-        restart_if_display_changed(&bottle, &wine, display.as_ref(), "game")?;
     }
+    let name = bottle.config.name.clone();
     let outcome = uncork_core::steam::play(
         &ctx.layout,
         &mut bottle,
@@ -159,6 +159,7 @@ pub(super) fn play_steam_game(
         &components,
         profile,
         display.as_ref(),
+        &mut |change| confirm_display_restart(&name, change, "game"),
         appid,
         args,
         options,
@@ -186,32 +187,36 @@ pub(super) fn play_steam_game(
 }
 
 /// Stop `bottle` when the main display changed since its running Wine
-/// session started ([`uncork_core::steam::display_change`]), saying so, so
-/// that the program (`what`: "game" or "program") starts in a session
-/// that knows the new display.
+/// session started ([`uncork_core::steam::display_change`]) and
+/// [`confirm_display_restart`] agrees, so that the program starts in a
+/// session that knows the new display (`run`; `play` leaves this to
+/// [`uncork_core::steam::play`], once the game is planned).
 fn restart_if_display_changed(
     bottle: &Bottle,
     wine: &WineRuntime,
     display: Option<&Display>,
-    what: &str,
 ) -> anyhow::Result<()> {
     let Some(change) = uncork_core::steam::display_change(bottle, wine, display)
         .context("cannot tell whether the bottle is running")?
     else {
         return Ok(());
     };
-    let since = if uncork_steam::SteamInstall::find(bottle.prefix()).is_some() {
-        "Steam started".to_owned()
-    } else {
-        format!("bottle {} started", bottle.config.name)
-    };
+    if confirm_display_restart(&bottle.config.name, &change, "program") {
+        uncork_core::steam::stop_bottle(bottle, wine, uncork_core::steam::SHUTDOWN_GRACE)
+            .with_context(|| format!("cannot stop bottle {}", bottle.config.name))?;
+    }
+    Ok(())
+}
+
+/// Say that bottle `bottle` is about to be restarted because the main
+/// display changed (`change`), so the `what` ("game" or "program") sees
+/// the new display; `true` to go ahead.
+fn confirm_display_restart(bottle: &str, change: &DisplayChange, what: &str) -> bool {
     eprintln!(
-        "The main display changed since {since} ({} → {}); restarting the bottle so the {what} sees the new display",
+        "The main display changed since bottle {bottle} started ({} → {}); restarting the bottle so the {what} sees the new display",
         change.before, change.now
     );
-    uncork_core::steam::stop_bottle(bottle, wine, uncork_core::steam::SHUTDOWN_GRACE)
-        .with_context(|| format!("cannot stop bottle {}", bottle.config.name))?;
-    Ok(())
+    true
 }
 
 /// The note after a real launch: macOS does not let a background process
@@ -240,12 +245,6 @@ fn report_play(
         println!("Started {program} on {backend}.");
         return Ok(ExitCode::SUCCESS);
     };
-    if let Some(change) = &outcome.display_change {
-        println!(
-            "Restarted bottle {}: the main display changed ({} → {}).",
-            bottle.config.name, change.before, change.now
-        );
-    }
     let waited_for = if outcome.mode == LaunchMode::Applaunch {
         println!(
             "Started Steam in bottle {} with -applaunch {appid} (pid {}); Steam starts {program} on {backend}.",
@@ -346,7 +345,7 @@ pub(super) fn run(ctx: &Ctx, args: &RunArgs) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     print_warnings(&plan.warnings);
-    restart_if_display_changed(&bottle, &wine, display.as_ref(), "program")?;
+    restart_if_display_changed(&bottle, &wine, display.as_ref())?;
     let child = launch::execute(&plan, &mut bottle, &wine)
         .with_context(|| format!("cannot start {}", exe.display()))?;
     report_launch(&plan, Some(child), &bottle, &wine, args.launch.wait)

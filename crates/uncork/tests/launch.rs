@@ -357,6 +357,83 @@ fn run_restarts_a_bottle_whose_main_display_changed() {
     assert_eq!(kills(&home), before + 1);
 }
 
+/// Bottle `b` with Steam and Half-Life (app 70) installed, a profile `hl`
+/// that starts it without Steam, and a running Wine session that started
+/// on the built-in display, while a 5K display is now the main one.
+fn running_bottle_on_an_old_display(home: &Home) {
+    home.install_fake_wine();
+    let dir = home.write_bottle("b", FAKE_WINE);
+    let steam = home.install_fake_steam("b", &[(70, "Half-Life", 4)]);
+    PeBuilder::pe32().write(&steam.join("steamapps/common/Half-Life/hl.exe"));
+    let profiles = home.root().join("profiles");
+    fs::create_dir_all(&profiles).unwrap();
+    fs::write(
+        profiles.join("hl.toml"),
+        "schema = 1\nid = \"hl\"\nname = \"Half-Life\"\n[steam]\nappid = 70\n[exe]\npath = \"hl.exe\"\n[launch]\nmode = \"standalone\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("uncork-state.toml"),
+        format!(
+            "schema = 1\nprefix_wine = {FAKE_WINE:?}\nsession_display = \"Color LCD 1728x1117 @120Hz\"\n"
+        ),
+    )
+    .unwrap();
+    home.start_fake_wineserver();
+    home.set_displays(EXTERNAL_5K_DISPLAY);
+}
+
+#[test]
+fn play_restarts_a_bottle_for_a_new_display_only_once_the_game_is_planned() {
+    let home = Home::new();
+    running_bottle_on_an_old_display(&home);
+    let kills = |home: &Home| {
+        home.calls()
+            .iter()
+            .filter(|call| call.starts_with("wineserver --kill"))
+            .count()
+    };
+
+    // A game that is not installed stops nothing.
+    let stderr = home.stderr_of_failure(&["play", "999999", "-b", "b"]);
+    assert!(
+        stderr.contains(r#"Steam app "999999" not found"#),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("main display changed"), "{stderr}");
+    assert_eq!(kills(&home), 0, "{:#?}", home.calls());
+    assert!(home.server_file().exists(), "the bottle still runs");
+
+    // Nor does a backend that is not installed.
+    let stderr = home.stderr_of_failure(&["play", "hl", "-b", "b", "--backend", "dxvk"]);
+    assert!(stderr.contains("cannot play Half-Life"), "{stderr}");
+    assert_eq!(kills(&home), 0, "{:#?}", home.calls());
+
+    // A game that can start restarts the bottle first, saying so.
+    home.uncork()
+        .args(["play", "hl", "-b", "b", "--backend", "wined3d", "--wait"])
+        .assert()
+        .success()
+        .stderr(contains(
+            "The main display changed since bottle b started (Color LCD 1728x1117 @120Hz → LG UltraFine 2560x1440 @60Hz); restarting the bottle so the game sees the new display",
+        ));
+    let calls = home.calls();
+    let kill = calls
+        .iter()
+        .position(|call| call.starts_with("wineserver --kill"))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    let game = calls
+        .iter()
+        .position(|call| call.contains("hl.exe |"))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    assert!(kill < game, "{calls:#?}");
+    let recorded = fs::read_to_string(home.bottle("b").join("uncork-state.toml")).unwrap();
+    assert!(
+        recorded.contains("session_display = \"LG UltraFine 2560x1440 @60Hz\""),
+        "{recorded}"
+    );
+}
+
 #[test]
 fn play_wait_returns_when_the_game_exits_while_steam_keeps_running() {
     let home = Home::new();

@@ -1253,21 +1253,33 @@ pub struct PlayOutcome {
     /// `true` if Steam had to be started first.
     pub started_steam: bool,
     /// The main display changed since the bottle's running Wine session
-    /// started, so the bottle was stopped (a dry run only reports it).
+    /// started (a dry run only reports it).
     pub display_change: Option<DisplayChange>,
+    /// The bottle was stopped because of `display_change` (the
+    /// [`ConfirmRestart`] agreed), so the game started in a new session.
+    pub restarted: bool,
 }
+
+/// Asked by [`play`] once the game is found and planned, before it stops a
+/// running bottle whose main display changed ([`DisplayChange`]): `true`
+/// stops the bottle (Steam and anything else running in it), `false`
+/// starts the game in the running session, which still sees the old
+/// display. The CLI says what is about to happen here and asks on a
+/// terminal.
+pub type ConfirmRestart<'a> = dyn FnMut(&DisplayChange) -> bool + 'a;
 
 /// Play Steam app `appid` in `bottle`: the whole `uncork play` flow, shared
 /// by the CLI and (later) the macOS app.
 ///
 /// 1. Find the app ([`plan_game`] with `profile`, `display`, `args`,
-///    `options`).
+///    `options`). Nothing is stopped or changed before this succeeds.
 /// 2. Check whether the main display changed since the bottle's running
 ///    Wine session started ([`display_change`]). `dry_run`: add a warning
 ///    saying so to the plan and return it without touching anything.
-/// 3. When it changed, stop the bottle ([`stop_bottle`], Steam getting
-///    [`SHUTDOWN_GRACE`] at most `steam_timeout`), so Steam and the game
-///    start again in a session that knows the new display.
+/// 3. When it changed and `confirm_restart` agrees, stop the bottle
+///    ([`stop_bottle`], Steam getting [`SHUTDOWN_GRACE`] at most
+///    `steam_timeout`), so Steam and the game start again in a session
+///    that knows the new display.
 /// 4. Apply the profile's INI edits ([`crate::launch::apply_profile_ini`],
 ///    `{display.*}` values from `display`).
 /// 5. By launch mode: `Direct` → [`ensure_running`] (timeout
@@ -1297,6 +1309,7 @@ pub fn play(
     components: &[crate::component::InstalledComponent],
     profile: Option<&crate::profile::GameProfile>,
     display: Option<&Display>,
+    confirm_restart: &mut ConfirmRestart<'_>,
     appid: u32,
     args: &[String],
     options: &LaunchOptions,
@@ -1314,7 +1327,7 @@ pub fn play(
         shutdown_grace: SHUTDOWN_GRACE,
         poll: POLL_INTERVAL,
     };
-    play_with(layout, bottle, wine, &request, dry_run)
+    play_with(layout, bottle, wine, &request, confirm_restart, dry_run)
 }
 
 /// The inputs of [`play`] that pass through unchanged.
@@ -1337,6 +1350,7 @@ fn play_with(
     bottle: &mut Bottle,
     wine: &WineRuntime,
     request: &PlayRequest<'_>,
+    confirm_restart: &mut ConfirmRestart<'_>,
     dry_run: bool,
 ) -> crate::Result<PlayOutcome> {
     let app = find_game(bottle, request.appid)?;
@@ -1366,15 +1380,25 @@ fn play_with(
             ini_changed: Vec::new(),
             started_steam: false,
             display_change,
+            restarted: false,
         });
     }
-    if let Some(change) = &display_change {
+    let restarted = display_change.as_ref().is_some_and(|change| {
+        let restart = confirm_restart(change);
         tracing::info!(
-            "the main display changed since bottle {} started ({} → {}); restarting it",
+            "the main display changed since bottle {} started ({} → {}); {}",
             bottle.config.name,
             change.before,
-            change.now
+            change.now,
+            if restart {
+                "restarting it"
+            } else {
+                "not restarting it, as asked"
+            }
         );
+        restart
+    });
+    if restarted {
         let grace = request.shutdown_grace.min(request.steam_timeout);
         stop_bottle_with(bottle, wine, grace, request.poll)?;
     }
@@ -1417,6 +1441,7 @@ fn play_with(
         ini_changed,
         started_steam,
         display_change,
+        restarted,
     })
 }
 
@@ -1675,7 +1700,15 @@ mod tests {
         let components = fx.dxmt();
         let options = LaunchOptions::default();
         let request = quick(&components, None, &[], &options);
-        let mut outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        let mut outcome = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| true,
+            false,
+        )
+        .unwrap();
         assert!(outcome.started_steam);
         assert_eq!(outcome.mode, LaunchMode::Direct);
         assert_eq!(outcome.log, outcome.plan.log, "the game's own log");
@@ -1711,7 +1744,15 @@ mod tests {
             display: Some(&built_in),
             ..quick(&components, None, &[], &options)
         };
-        let mut outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        let mut outcome = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| true,
+            false,
+        )
+        .unwrap();
         outcome.child.take().unwrap().wait().unwrap();
         assert!(outcome.started_steam);
         assert_eq!(outcome.display_change, None);
@@ -1744,12 +1785,21 @@ mod tests {
             ..quick(&components, None, &[], &options)
         };
 
-        let mut outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        let mut outcome = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| true,
+            false,
+        )
+        .unwrap();
         outcome.child.take().unwrap().wait().unwrap();
 
         let change = outcome.display_change.unwrap();
         assert_eq!(change.before, "Color LCD 1728x1117 @120Hz");
         assert_eq!(change.now, "LG UltraFine 2560x1440 @60Hz");
+        assert!(outcome.restarted);
         assert!(outcome.started_steam, "Steam started again");
         let shutdown = fx.position("steam.exe -shutdown");
         let kill = fx.position("wineserver --kill");
@@ -1764,6 +1814,86 @@ mod tests {
             fx.bottle.state.session_display.as_deref(),
             Some("LG UltraFine 2560x1440 @60Hz")
         );
+    }
+
+    #[test]
+    fn a_declined_restart_starts_the_game_in_the_running_session() {
+        let mut fx = Fixture::new();
+        let dir = fx.add_game();
+        let components = fx.dxmt();
+        let options = LaunchOptions::default();
+        fx.bottle
+            .record_session_display(Some("Color LCD 1728x1117 @120Hz"));
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fx.flag("server");
+        let external = display("LG UltraFine", 2560, 1440, 60.0);
+        let request = PlayRequest {
+            display: Some(&external),
+            ..quick(&components, None, &[], &options)
+        };
+
+        let mut asked = Vec::new();
+        let mut outcome = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |change| {
+                asked.push(change.clone());
+                false
+            },
+            false,
+        )
+        .unwrap();
+        outcome.child.take().unwrap().wait().unwrap();
+
+        assert_eq!(asked.len(), 1);
+        assert_eq!(outcome.display_change.as_ref(), asked.first());
+        assert!(!outcome.restarted);
+        assert!(!outcome.started_steam, "Steam kept running");
+        let calls = fx.calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.contains("-shutdown") || call.contains("--kill")),
+            "{calls:#?}"
+        );
+        fx.position(&format!("{} |", dir.join("riseofnations.exe").display()));
+        assert_eq!(
+            fx.bottle.state.session_display.as_deref(),
+            Some("Color LCD 1728x1117 @120Hz"),
+            "still the running session's"
+        );
+    }
+
+    #[test]
+    fn a_game_that_cannot_be_found_never_stops_the_bottle() {
+        let mut fx = Fixture::new();
+        fx.install_steam();
+        let components = fx.dxmt();
+        let options = LaunchOptions::default();
+        fx.bottle
+            .record_session_display(Some("Color LCD 1728x1117 @120Hz"));
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fx.flag("server");
+        let external = display("LG UltraFine", 2560, 1440, 60.0);
+        let request = PlayRequest {
+            display: Some(&external),
+            appid: 999_999,
+            ..quick(&components, None, &[], &options)
+        };
+
+        let err = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| panic!("nothing to restart for"),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("999999"), "{err}");
+        assert!(fx.calls().is_empty(), "{:#?}", fx.calls());
     }
 
     #[test]
@@ -1804,7 +1934,15 @@ mod tests {
             ..LaunchOptions::default()
         };
         let request = quick(&components, None, &[], &options);
-        let outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, true).unwrap();
+        let outcome = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| true,
+            true,
+        )
+        .unwrap();
         let env = &outcome.plan.command.env;
         assert_eq!(env.get("SteamAppId").map(String::as_str), Some("287450"));
         assert_eq!(env.get("SteamGameId").map(String::as_str), Some("1"));
@@ -1823,7 +1961,15 @@ mod tests {
         request.shutdown_grace = Duration::from_millis(50);
 
         let started = std::time::Instant::now();
-        let outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        let outcome = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| true,
+            false,
+        )
+        .unwrap();
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "{:?}",
@@ -1854,7 +2000,15 @@ mod tests {
         let options = LaunchOptions::default();
         let request = quick(&components, Some(&profile), &args, &options);
 
-        let outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        let outcome = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| true,
+            false,
+        )
+        .unwrap();
         assert!(outcome.started_steam);
         assert_eq!(outcome.mode, LaunchMode::Applaunch);
         assert_eq!(outcome.plan.activation.backend, Backend::Dxmt);
@@ -1902,7 +2056,15 @@ mod tests {
         let profile = applaunch_profile("wined3d");
         let options = LaunchOptions::default();
         let request = quick(&[], Some(&profile), &[], &options);
-        let outcome = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap();
+        let outcome = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| true,
+            false,
+        )
+        .unwrap();
         assert!(outcome.child.unwrap().wait().unwrap().success());
         assert!(
             !fx.calls().iter().any(|call| call.contains("-shutdown")),
@@ -1924,7 +2086,15 @@ mod tests {
         let options = LaunchOptions::default();
         let mut request = quick(&[], Some(&profile), &[], &options);
         request.steam_timeout = Duration::from_millis(30);
-        let err = play_with(&fx.layout, &mut fx.bottle, &fx.wine, &request, false).unwrap_err();
+        let err = play_with(
+            &fx.layout,
+            &mut fx.bottle,
+            &fx.wine,
+            &request,
+            &mut |_| true,
+            false,
+        )
+        .unwrap_err();
         assert!(
             err.to_string()
                 .starts_with("steam.exe did not report running within 30ms"),

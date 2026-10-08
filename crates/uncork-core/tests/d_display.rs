@@ -316,6 +316,7 @@ fn play(
         &components,
         Some(profile),
         display,
+        &mut |_| true,
         APPID,
         &[],
         &LaunchOptions::default(),
@@ -358,6 +359,7 @@ fn play_restarts_a_bottle_whose_main_display_changed() {
     let mut outcome = play(&fx, &mut bottle, &profile, Some(&external()), false);
     outcome.child.take().unwrap().wait().unwrap();
     assert!(outcome.display_change.is_some());
+    assert!(outcome.restarted);
     let calls = fx.calls();
     let kill = position(&calls, "wineserver --kill");
     let game = position(&calls, "riseofnations.exe |");
