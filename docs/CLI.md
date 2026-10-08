@@ -169,7 +169,8 @@ Options:
           Print the launch plan (command, environment, DLLs to install) and exit
 
       --wait
-          Wait for the program and its wineserver to exit before returning
+          Wait for the program to exit before returning (also for the bottle's wineserver, unless
+          Steam keeps running in it)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -238,7 +239,8 @@ Options:
           Print the launch plan (command, environment, DLLs to install) and exit
 
       --wait
-          Wait for the program and its wineserver to exit before returning
+          Wait for the program to exit before returning (also for the bottle's wineserver, unless
+          Steam keeps running in it)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -676,7 +678,8 @@ Options:
           Print the launch plan (command, environment, DLLs to install) and exit
 
       --wait
-          Wait for the program and its wineserver to exit before returning
+          Wait for the program to exit before returning (also for the bottle's wineserver, unless
+          Steam keeps running in it)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -761,7 +764,8 @@ Options:
           Print the launch plan (command, environment, DLLs to install) and exit
 
       --wait
-          Wait for the program and its wineserver to exit before returning
+          Wait for the program to exit before returning (also for the bottle's wineserver, unless
+          Steam keeps running in it)
 
   -h, --help
           Print help (see a summary with '-h')

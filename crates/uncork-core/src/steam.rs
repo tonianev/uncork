@@ -12,7 +12,8 @@
 //!    `steam.exe` the installer may start.
 //! 3. Start the client once in the foreground so the user can sign in
 //!    (Uncork never handles Steam credentials). The first start downloads
-//!    the client and can take 15–25 minutes.
+//!    the client (about 340 MB; measured at about a minute on a fast
+//!    connection, longer on slow ones).
 //!
 //! # Graphics for the Steam client
 //!

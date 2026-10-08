@@ -133,7 +133,8 @@ pub struct LaunchFlags {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Wait for the program and its wineserver to exit before returning.
+    /// Wait for the program to exit before returning (also for the bottle's
+    /// wineserver, unless Steam keeps running in it).
     #[arg(long)]
     pub wait: bool,
 }

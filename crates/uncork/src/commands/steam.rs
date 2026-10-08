@@ -75,7 +75,7 @@ pub(super) fn install_and_start(
         "Sign in to Steam in the window that opened, install your game, then run: uncork play <game>"
     );
     println!(
-        "The first start updates the client and can take 15 to 25 minutes; progress is in {}",
+        "The first start downloads the Steam client (about 340 MB), which takes a minute or more; progress is in {}",
         uncork_core::steam::logs_dir(bottle)
             .join("bootstrap_log.txt")
             .display()
