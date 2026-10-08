@@ -86,7 +86,7 @@ Changes made after the third session (2026-10-08), unit-tested with fakes and no
 - Retina mode and the DPI are written as a pair (96 without Retina mode, 192 with it); `bottle set` writes them with the bottle stopped; `bottle import` keeps a CrossOver bottle's Retina choice; `doctor` reports a bottle whose pair disagrees (`bottle-dpi`).
 - Launches read the main display with `system_profiler`. Profile INI values can use `{display.width}`, `{display.height}` and `{display.refresh}`, and the Rise of Nations profile runs the game as a borderless window at the display's "looks like" size (`Fullscreen=2`).
 - DXMT launches are capped at the main display's refresh rate (`performance.max_fps` overrides it); MetalFX stays off on DXMT in a Retina bottle.
-- A running bottle whose main display has changed since it started is restarted before `play` and `run`.
+- A running bottle whose main display has changed since it started is restarted before `play` and `run`, once the launch is planned and, on a terminal, after asking.
 - After a launch Uncork says where to find a window that opened behind the terminal.
 
 Left for M1:
