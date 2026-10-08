@@ -3,10 +3,10 @@
 //! # Install ([`install`])
 //!
 //! 1. Download Valve's `SteamSetup.exe` ([`uncork_steam::client::INSTALLER_URLS`])
-//!    into `cache/downloads/`. A hash different from
-//!    [`uncork_steam::client::INSTALLER_SHA256`] is a warning (Valve replaces
-//!    the file in place), not an error, but the file must parse as a 32-bit
-//!    GUI PE.
+//!    into `cache/downloads/`, unless the copy there already has the pinned
+//!    hash [`uncork_steam::client::INSTALLER_SHA256`]. A downloaded file
+//!    with another hash is a warning (Valve replaces the file in place), not
+//!    an error, but the file must parse as a 32-bit GUI PE.
 //! 2. `wine SteamSetup.exe /S` (silent; installs to
 //!    `C:\Program Files (x86)\Steam`), then `wineserver --kill` to stop the
 //!    `steam.exe` the installer may start.
@@ -120,7 +120,10 @@ const CLIENT_BUILTIN: [&str; 3] = ["d3d12", "d3d9", "dxgi"];
 const EXE_SEARCH_DEPTH: usize = 3;
 
 /// Download Valve's installer and install Steam into `bottle`.
-/// Skips the installer when `steam.exe` already exists.
+/// Skips the installer when `Steam.exe` already exists, and the download
+/// when `cache/downloads/SteamSetup.exe` already has the pinned SHA-256
+/// ([`uncork_steam::client::INSTALLER_SHA256`]); a cached file with any
+/// other hash is downloaded again.
 ///
 /// The installer runs as `wine <cache>/SteamSetup.exe /S` with the bottle's
 /// environment ([`crate::launch::base_env`] plus its `env`,
@@ -137,17 +140,19 @@ pub fn install(
     wine: &WineRuntime,
     progress: &mut dyn Progress,
 ) -> crate::Result<()> {
-    install_with(layout, bottle, wine, |dest| {
+    install_with(layout, bottle, wine, client::INSTALLER_SHA256, |dest| {
         download_installer(dest, progress)
     })
 }
 
-/// [`install`] with the download step supplied by the caller (tests);
-/// `fetch` writes the installer to the given path and returns its URL.
+/// [`install`] with the pinned hash and the download step supplied by the
+/// caller (tests); `fetch` writes the installer to the given path and
+/// returns its URL.
 fn install_with(
     layout: &Layout,
     bottle: &Bottle,
     wine: &WineRuntime,
+    pinned_sha256: &str,
     fetch: impl FnOnce(&Path) -> crate::Result<String>,
 ) -> crate::Result<()> {
     if let Some(steam) = SteamInstall::find(bottle.prefix()) {
@@ -158,8 +163,13 @@ fn install_with(
         return Ok(());
     }
     let installer = layout.downloads_dir().join(INSTALLER_FILE);
-    let url = fetch(&installer)?;
-    check_installer(&installer, &url)?;
+    let url = if cached_installer_is_pinned(&installer, pinned_sha256) {
+        tracing::info!("using the cached {} (SHA-256 matches)", installer.display());
+        installer.display().to_string()
+    } else {
+        fetch(&installer)?
+    };
+    check_installer(&installer, &url, pinned_sha256)?;
 
     let log = layout.logs_dir().join(format!(
         "{}-steam-install.log",
@@ -224,14 +234,24 @@ fn download_installer(dest: &Path, progress: &mut dyn Progress) -> crate::Result
     }))
 }
 
+/// `true` when `path` exists and its SHA-256 is `pinned_sha256`.
+fn cached_installer_is_pinned(path: &Path, pinned_sha256: &str) -> bool {
+    match crate::download::sha256_file(path) {
+        Ok(sha256) => sha256.eq_ignore_ascii_case(pinned_sha256),
+        Err(err) => {
+            tracing::debug!("no usable cached installer: {err}");
+            false
+        }
+    }
+}
+
 /// Warn on a changed hash; fail (and delete the file) unless it is a 32-bit
 /// Windows GUI program.
-fn check_installer(path: &Path, url: &str) -> crate::Result<()> {
+fn check_installer(path: &Path, url: &str, pinned_sha256: &str) -> crate::Result<()> {
     let sha256 = crate::download::sha256_file(path)?;
-    if !sha256.eq_ignore_ascii_case(client::INSTALLER_SHA256) {
+    if !sha256.eq_ignore_ascii_case(pinned_sha256) {
         tracing::warn!(
-            "{INSTALLER_FILE} from {url} has SHA-256 {sha256}, not {} as last checked; Valve replaces the installer in place, so continuing",
-            client::INSTALLER_SHA256
+            "{INSTALLER_FILE} from {url} has SHA-256 {sha256}, not {pinned_sha256} as last checked; Valve replaces the installer in place, so continuing"
         );
     }
     let rejected = |detail: String| {
@@ -1345,12 +1365,18 @@ mod tests {
     fn install_runs_the_installer_and_stops_the_client_it_started() {
         let fx = Fixture::new();
         let mut fetched = None;
-        install_with(&fx.layout, &fx.bottle, &fx.wine, |dest| {
-            fs::create_dir_all(dest.parent().unwrap()).unwrap();
-            fs::write(dest, installer_bytes()).unwrap();
-            fetched = Some(dest.to_path_buf());
-            Ok("https://steam.invalid/SteamSetup.exe".to_owned())
-        })
+        install_with(
+            &fx.layout,
+            &fx.bottle,
+            &fx.wine,
+            client::INSTALLER_SHA256,
+            |dest| {
+                fs::create_dir_all(dest.parent().unwrap()).unwrap();
+                fs::write(dest, installer_bytes()).unwrap();
+                fetched = Some(dest.to_path_buf());
+                Ok("https://steam.invalid/SteamSetup.exe".to_owned())
+            },
+        )
         .unwrap();
         let installer = fx.layout.downloads_dir().join("SteamSetup.exe");
         assert_eq!(fetched.as_deref(), Some(installer.as_path()));
@@ -1379,12 +1405,57 @@ mod tests {
     }
 
     #[test]
+    fn install_reuses_a_cached_installer_with_the_pinned_hash() {
+        let fx = Fixture::new();
+        let installer = fx.layout.downloads_dir().join("SteamSetup.exe");
+        fs::create_dir_all(installer.parent().unwrap()).unwrap();
+        fs::write(&installer, installer_bytes()).unwrap();
+        let pinned = crate::download::sha256_file(&installer).unwrap();
+        install_with(&fx.layout, &fx.bottle, &fx.wine, &pinned, |_| {
+            panic!("a verified cached installer is not downloaded again")
+        })
+        .unwrap();
+        assert!(SteamInstall::find(fx.bottle.prefix()).is_some());
+        assert!(
+            fx.calls()[0].starts_with(&format!("wine {} /S |", installer.display())),
+            "{:#?}",
+            fx.calls()
+        );
+    }
+
+    #[test]
+    fn install_downloads_again_when_the_cached_installer_differs() {
+        let fx = Fixture::new();
+        let installer = fx.layout.downloads_dir().join("SteamSetup.exe");
+        fs::create_dir_all(installer.parent().unwrap()).unwrap();
+        fs::write(&installer, b"stale or partial").unwrap();
+        let pinned = {
+            let fresh = fx.layout.downloads_dir().join("fresh.exe");
+            fs::write(&fresh, installer_bytes()).unwrap();
+            crate::download::sha256_file(&fresh).unwrap()
+        };
+        let mut fetched = false;
+        install_with(&fx.layout, &fx.bottle, &fx.wine, &pinned, |dest| {
+            fetched = true;
+            fs::write(dest, installer_bytes()).unwrap();
+            Ok("https://steam.invalid/SteamSetup.exe".to_owned())
+        })
+        .unwrap();
+        assert!(fetched);
+        assert_eq!(fs::read(&installer).unwrap(), installer_bytes());
+    }
+
+    #[test]
     fn install_skips_everything_when_steam_is_there() {
         let fx = Fixture::new();
         fx.install_steam();
-        install_with(&fx.layout, &fx.bottle, &fx.wine, |_| {
-            panic!("nothing should be downloaded")
-        })
+        install_with(
+            &fx.layout,
+            &fx.bottle,
+            &fx.wine,
+            client::INSTALLER_SHA256,
+            |_| panic!("nothing should be downloaded"),
+        )
         .unwrap();
         assert!(fx.calls().is_empty());
     }
@@ -1400,11 +1471,17 @@ mod tests {
                 .build(),
             pe_builder::PeBuilder::pe32().dll().build(),
         ] {
-            let err = install_with(&fx.layout, &fx.bottle, &fx.wine, |dest| {
-                fs::create_dir_all(dest.parent().unwrap()).unwrap();
-                fs::write(dest, &bytes).unwrap();
-                Ok("https://steam.invalid/SteamSetup.exe".to_owned())
-            })
+            let err = install_with(
+                &fx.layout,
+                &fx.bottle,
+                &fx.wine,
+                client::INSTALLER_SHA256,
+                |dest| {
+                    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+                    fs::write(dest, &bytes).unwrap();
+                    Ok("https://steam.invalid/SteamSetup.exe".to_owned())
+                },
+            )
             .unwrap_err();
             assert!(
                 matches!(&err, Error::Download { url, message } if url.contains("steam.invalid") && message.starts_with("not a Windows installer")),
@@ -1419,11 +1496,17 @@ mod tests {
     fn install_fails_naming_the_log_when_steam_exe_does_not_appear() {
         let fx = Fixture::new();
         fx.flag("no-steam-exe");
-        let err = install_with(&fx.layout, &fx.bottle, &fx.wine, |dest| {
-            fs::create_dir_all(dest.parent().unwrap()).unwrap();
-            fs::write(dest, installer_bytes()).unwrap();
-            Ok("https://steam.invalid/SteamSetup.exe".to_owned())
-        })
+        let err = install_with(
+            &fx.layout,
+            &fx.bottle,
+            &fx.wine,
+            client::INSTALLER_SHA256,
+            |dest| {
+                fs::create_dir_all(dest.parent().unwrap()).unwrap();
+                fs::write(dest, installer_bytes()).unwrap();
+                Ok("https://steam.invalid/SteamSetup.exe".to_owned())
+            },
+        )
         .unwrap_err();
         let message = err.to_string();
         assert!(
@@ -1436,12 +1519,18 @@ mod tests {
     #[test]
     fn install_passes_download_errors_through() {
         let fx = Fixture::new();
-        let err = install_with(&fx.layout, &fx.bottle, &fx.wine, |_| {
-            Err(Error::Download {
-                url: "https://steam.invalid/".to_owned(),
-                message: "offline".to_owned(),
-            })
-        })
+        let err = install_with(
+            &fx.layout,
+            &fx.bottle,
+            &fx.wine,
+            client::INSTALLER_SHA256,
+            |_| {
+                Err(Error::Download {
+                    url: "https://steam.invalid/".to_owned(),
+                    message: "offline".to_owned(),
+                })
+            },
+        )
         .unwrap_err();
         assert!(matches!(err, Error::Download { .. }), "{err:?}");
     }
