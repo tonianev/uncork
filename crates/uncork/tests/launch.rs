@@ -282,6 +282,26 @@ fn play_dry_run_shows_backend_ini_and_command() {
 }
 
 #[test]
+fn run_says_where_to_find_a_window_that_opened_behind_the_terminal() {
+    let home = home_with_bottle();
+    let exe = game_in_bottle(&home, "test1");
+    home.uncork()
+        .args(["run", "-b", "test1", "--backend", "wined3d"])
+        .arg(&exe)
+        .assert()
+        .success()
+        .stderr(contains(
+            "If the program opened behind this window, click it in the Dock or press ⌘-Tab.",
+        ));
+    home.uncork()
+        .args(["run", "-b", "test1", "--backend", "wined3d", "--dry-run"])
+        .arg(&exe)
+        .assert()
+        .success()
+        .stderr(contains("Dock").not());
+}
+
+#[test]
 fn run_restarts_a_bottle_whose_main_display_changed() {
     let home = home_with_bottle();
     let exe = game_in_bottle(&home, "test1");

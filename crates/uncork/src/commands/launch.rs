@@ -214,6 +214,13 @@ fn restart_if_display_changed(
     Ok(())
 }
 
+/// The note after a real launch: macOS does not let a background process
+/// bring a window to the front, so the program's window can open behind
+/// the terminal.
+fn print_focus_hint(what: &str) {
+    eprintln!("If the {what} opened behind this window, click it in the Dock or press ⌘-Tab.");
+}
+
 /// [`report_launch`] for `play`: in Applaunch mode the process Uncork
 /// started is the Steam client, so its pid and log are labelled as Steam's.
 /// `--wait` waits for that process only while Steam runs in the bottle
@@ -252,6 +259,7 @@ fn report_play(
         println!("Log: {}", outcome.log.display());
         program
     };
+    print_focus_hint("game");
     if !wait {
         return Ok(ExitCode::SUCCESS);
     }
@@ -566,6 +574,7 @@ fn report_launch(
         child.id()
     );
     println!("Log: {}", plan.log.display());
+    print_focus_hint("program");
     if !wait {
         return Ok(ExitCode::SUCCESS);
     }
