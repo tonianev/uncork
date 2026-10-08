@@ -204,8 +204,21 @@ exit 0
     }
 
     /// Write a bottle directly (no Wine involved): `uncork.toml` naming
-    /// `wine` plus a `system.reg`, so it counts as initialized.
+    /// `wine`, a `system.reg` and a state recording `prefix_wine`, so it
+    /// counts as initialized.
     pub fn write_bottle(&self, name: &str, wine: &str) -> PathBuf {
+        let dir = self.write_half_made_bottle(name, wine);
+        fs::write(dir.join("system.reg"), "WINE REGISTRY Version 2\n").unwrap();
+        fs::write(
+            dir.join("uncork-state.toml"),
+            format!("schema = 1\nprefix_wine = {wine:?}\n"),
+        )
+        .unwrap();
+        dir
+    }
+
+    /// A bottle as a failed `bottle create` leaves it: `uncork.toml` only.
+    pub fn write_half_made_bottle(&self, name: &str, wine: &str) -> PathBuf {
         let dir = self.bottle(name);
         fs::create_dir_all(dir.join("drive_c/users/tester")).unwrap();
         fs::write(
@@ -213,7 +226,6 @@ exit 0
             format!("schema = 1\nname = {name:?}\nwine = {wine:?}\n"),
         )
         .unwrap();
-        fs::write(dir.join("system.reg"), "WINE REGISTRY Version 2\n").unwrap();
         dir
     }
 

@@ -41,8 +41,9 @@ pub(super) fn run(ctx: &Ctx, command: &SteamCommand) -> anyhow::Result<ExitCode>
 }
 
 fn install(ctx: &Ctx, bottle: Option<&str>, yes: bool) -> anyhow::Result<ExitCode> {
-    let bottle = ctx.open_bottle(bottle)?;
+    let mut bottle = ctx.open_bottle(bottle)?;
     let wine = bottle_wine(&ctx.layout, &bottle)?;
+    super::bottle::ensure_initialized(ctx, &mut bottle, &wine)?;
     if SteamInstall::find(bottle.prefix()).is_none() {
         confirm_download(
             &format!(

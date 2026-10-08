@@ -277,10 +277,15 @@ impl Bottle {
         self.drive_c().join("windows").join("syswow64")
     }
 
-    /// `true` once Wine has initialized the prefix (`system.reg` exists).
+    /// `true` once the bottle is complete: Wine has initialized the prefix
+    /// (`system.reg` exists) and either [`create`] got to its last step
+    /// (`prefix_wine` is recorded in the state) or the prefix was imported
+    /// (`imported_from` is set). A bottle a failed [`create`] left behind is
+    /// not; [`finish_create`] completes it.
     #[must_use]
     pub fn is_initialized(&self) -> bool {
         self.path.join("system.reg").is_file()
+            && (self.state.prefix_wine.is_some() || self.config.imported_from.is_some())
     }
 
     /// Write `uncork.toml` atomically.
@@ -411,12 +416,16 @@ pub struct CreateOptions {
 ///    fail — wineboot can hang on macOS 26+, Wine bug 59595), then wait for
 ///    the wineserver to exit ([`crate::wine::WineRuntime::wait_command`]).
 /// 4. Apply [`default_registry`] (Mac driver settings and the Windows
-///    version as `HKCU\Software\Wine` `Version`) with `regedit /S`.
-/// 5. Record `prefix_wine` in the state file.
+///    version as `HKCU\Software\Wine` `Version`) with `regedit /S`, and
+///    wait for the wineserver again, so none outlives `create`.
+/// 5. Record `prefix_wine` in the state file: from here on the bottle
+///    counts as initialized ([`Bottle::is_initialized`]).
 /// 6. Prewarm Rosetta's translation cache by running `wine --version`.
 ///
-/// Logs go to `logs/bottle-<name>-create.log`. On failure the half-made
-/// directory is left in place for inspection and the error names the log.
+/// Every Wine command runs with the bottle's environment
+/// ([`crate::launch::in_bottle`]). Logs go to `logs/bottle-<name>-create.log`.
+/// On failure the half-made directory is left in place for inspection, the
+/// error names the log, and [`finish_create`] can complete it later.
 ///
 /// # Errors
 /// Name, I/O or command errors.
@@ -457,27 +466,72 @@ fn create_with_timeout(
     };
     bottle.save_config()?;
 
-    let log = layout.logs_dir().join(format!("bottle-{name}-create.log"));
-    tracing::info!(
-        "initializing bottle {name} with Wine {} (log: {})",
-        wine.version,
-        log.display()
-    );
-    boot_prefix(&bottle, wine, &log, boot_timeout)?;
-    crate::process::run(&logged(
-        in_bottle(wine.wait_command(&bottle.path), &bottle, wine),
-        Some(&log),
-    ))?;
-    import_registry(&bottle, wine, &default_registry(&bottle.config), Some(&log))?;
-    bottle.state.prefix_wine = Some(wine.version.clone());
-    bottle.save_state()?;
-
+    let log = initialize(layout, &mut bottle, wine, boot_timeout)?;
     // The bottle is complete at this point; a failed prewarm only costs the
     // first launch some translation time.
     if let Err(err) = crate::process::run(&logged(wine.version_command(), Some(&log))) {
         tracing::warn!("could not prewarm Rosetta for Wine {}: {err}", wine.version);
     }
     Ok(bottle)
+}
+
+/// Complete a bottle that a failed [`create`] left behind (one that is not
+/// [`Bottle::is_initialized`]): run steps 3 to 5 of [`create`] again with
+/// `wine` (normally the bottle's own), from its `uncork.toml`. `wineboot -u`
+/// finishes or updates whatever the earlier attempt left. Does nothing for
+/// an initialized bottle.
+///
+/// # Errors
+/// I/O or command errors, as [`create`].
+pub fn finish_create(
+    layout: &Layout,
+    bottle: &mut Bottle,
+    wine: &WineRuntime,
+) -> crate::Result<()> {
+    finish_create_with_timeout(layout, bottle, wine, BOOT_TIMEOUT)
+}
+
+/// [`finish_create`] with a configurable `wineboot` watchdog.
+fn finish_create_with_timeout(
+    layout: &Layout,
+    bottle: &mut Bottle,
+    wine: &WineRuntime,
+    boot_timeout: Duration,
+) -> crate::Result<()> {
+    if bottle.is_initialized() {
+        return Ok(());
+    }
+    initialize(layout, bottle, wine, boot_timeout).map(|_log| ())
+}
+
+/// Steps 3 to 5 of [`create`]; returns the log they wrote to.
+fn initialize(
+    layout: &Layout,
+    bottle: &mut Bottle,
+    wine: &WineRuntime,
+    boot_timeout: Duration,
+) -> crate::Result<PathBuf> {
+    let name = &bottle.config.name;
+    let log = layout.logs_dir().join(format!("bottle-{name}-create.log"));
+    tracing::info!(
+        "initializing bottle {name} with Wine {} (log: {})",
+        wine.version,
+        log.display()
+    );
+    let wait = || {
+        crate::process::run(&logged(
+            in_bottle(wine.wait_command(&bottle.path), bottle, wine),
+            Some(&log),
+        ))
+    };
+    boot_prefix(bottle, wine, &log, boot_timeout)?;
+    wait()?;
+    import_registry(bottle, wine, &default_registry(&bottle.config), Some(&log))?;
+    // regedit started a wineserver of its own.
+    wait()?;
+    bottle.state.prefix_wine = Some(wine.version.clone());
+    bottle.save_state()?;
+    Ok(log)
 }
 
 /// A fresh `uncork.toml` with every optional setting at its default.
@@ -1464,7 +1518,7 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
         );
 
         let calls = wine.calls();
-        assert_eq!(calls.len(), 4, "{calls:#?}");
+        assert_eq!(calls.len(), 5, "{calls:#?}");
         let p = prefix.display();
         assert_eq!(
             calls[0],
@@ -1485,7 +1539,12 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
             "{}",
             calls[2]
         );
-        assert!(calls[3].starts_with("wine --version"), "{}", calls[3]);
+        assert_eq!(
+            calls[3],
+            format!("wineserver --wait | WINEPREFIX={p}"),
+            "regedit's wineserver does not outlive create"
+        );
+        assert!(calls[4].starts_with("wine --version"), "{}", calls[4]);
 
         let imported = std::fs::read_to_string(&wine.imported_reg).unwrap();
         assert_eq!(
@@ -1549,6 +1608,48 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
             "left in place for inspection"
         );
         assert!(!layout.bottle_dir("hang").join(STATE_FILE).exists());
+    }
+
+    #[test]
+    fn a_bottle_whose_create_failed_is_not_initialized_until_finished() {
+        let (dir, layout) = home();
+        let failing = fake_wine(dir.path(), BOOT_FAILS);
+        create(&layout, "half", &failing.runtime, &CreateOptions::default()).unwrap_err();
+        let mut bottle = Bottle::open_named(&layout, "half").unwrap();
+        assert!(!bottle.is_initialized());
+
+        // wineboot got far enough to write system.reg, but regedit never ran.
+        write(&bottle.path.join("system.reg"), "WINE REGISTRY Version 2\n");
+        assert!(
+            !bottle.is_initialized(),
+            "system.reg alone is not a finished bottle"
+        );
+
+        let wine = fake_wine(&dir.path().join("ok"), BOOT_OK);
+        finish_create_with_timeout(&layout, &mut bottle, &wine.runtime, Duration::from_secs(10))
+            .unwrap();
+        assert!(bottle.is_initialized());
+        assert_eq!(bottle.state.prefix_wine.as_deref(), Some("11.0-fake"));
+        assert_eq!(Bottle::open_named(&layout, "half").unwrap(), bottle);
+        let calls = wine.calls();
+        assert_eq!(calls.len(), 4, "{calls:#?}");
+        assert!(calls[0].starts_with("wine wineboot -u |"), "{calls:#?}");
+        assert!(calls[2].starts_with("wine regedit /S "), "{calls:#?}");
+        assert!(calls[3].starts_with("wineserver --wait |"), "{calls:#?}");
+
+        finish_create_with_timeout(&layout, &mut bottle, &wine.runtime, Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(wine.calls().len(), 4, "a finished bottle is left alone");
+    }
+
+    #[test]
+    fn imported_prefixes_count_as_initialized() {
+        let (dir, layout) = home();
+        let source = dir.path().join("prefix");
+        fake_prefix(&source);
+        let bottle = import(&layout, &source, "imported", "11.0", ImportMode::Clone).unwrap();
+        assert_eq!(bottle.state.prefix_wine, None);
+        assert!(bottle.is_initialized());
     }
 
     #[test]

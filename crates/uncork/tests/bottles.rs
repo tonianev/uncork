@@ -175,6 +175,77 @@ fn bottle_set_rejects_bad_settings_and_changes_nothing() {
 }
 
 #[test]
+fn bottle_set_keeps_the_config_until_the_registry_has_the_change() {
+    let home = Home::new();
+    let wine = home.install_fake_wine();
+    home.write_bottle("b", FAKE_WINE);
+    let config = home.bottle("b").join("uncork.toml");
+    let original = fs::read_to_string(&config).unwrap();
+
+    // regedit fails (say, a Wine client that cannot join the wineserver).
+    let script = wine.join("bin/wine");
+    let working = fs::read_to_string(&script).unwrap();
+    support::write_script(
+        &script,
+        &working.replace("case \"$1\" in", "case \"$1\" in\n    regedit) exit 1 ;;"),
+    );
+    let stderr = home.stderr_of_failure(&["bottle", "set", "b", "performance.retina=on"]);
+    assert!(
+        stderr.contains("cannot update the bottle's registry; nothing was changed"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+
+    // Running the same command again once Wine works applies it.
+    support::write_script(&script, &working);
+    home.uncork()
+        .args(["bottle", "set", "b", "performance.retina=on"])
+        .assert()
+        .success()
+        .stdout(contains("b: performance.retina = true"))
+        .stdout(contains("Updated the bottle's registry"));
+    assert_eq!(
+        home.json(&["bottle", "info", "b"])["config"]["performance"]["retina"],
+        true
+    );
+}
+
+#[test]
+fn bottle_set_without_the_bottles_wine_changes_nothing_and_can_be_repeated() {
+    let home = Home::new();
+    home.write_bottle("b", "11.0-missing");
+    let config = home.bottle("b").join("uncork.toml");
+    let original = fs::read_to_string(&config).unwrap();
+    let stderr = home.stderr_of_failure(&["bottle", "set", "b", "windows_version=win7"]);
+    assert!(stderr.contains("nothing was changed"), "{stderr}");
+    assert!(stderr.contains("run this command again"), "{stderr}");
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+
+    // Settings that do not touch the registry still work without Wine.
+    home.uncork()
+        .args(["bottle", "set", "b", "performance.hud=on"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn bottle_set_says_to_restart_after_an_msync_change() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_bottle("b", FAKE_WINE);
+    home.uncork()
+        .args(["bottle", "set", "b", "performance.msync=off"])
+        .assert()
+        .success()
+        .stderr(contains("uncork bottle kill b"));
+    home.uncork()
+        .args(["bottle", "set", "b", "performance.hud=on"])
+        .assert()
+        .success()
+        .stderr(contains("bottle kill").not());
+}
+
+#[test]
 fn bottle_create_needs_wine_and_a_free_name() {
     let home = Home::new();
     let stderr = home.stderr_of_failure(&["bottle", "create", "x"]);
@@ -460,6 +531,54 @@ fn setup_with_everything_installed_creates_the_bottle() {
     let stdout = String::from_utf8_lossy(&again.stdout);
     assert!(stdout.contains("Bottle games already exists"), "{stdout}");
     assert!(!stdout.contains("Default bottle is now"), "{stdout}");
+}
+
+#[test]
+fn setup_finishes_a_bottle_an_earlier_run_left_half_made() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.install_component("dxmt", "0.80", &[], &[]);
+    home.install_component("dxvk", "1.10.3-20230507", &[], &[]);
+    home.write_half_made_bottle("games", FAKE_WINE);
+    let Some(output) = setup_output(&home, &["setup", "--no-steam", "--bottle", "games"]) else {
+        return;
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("Finished creating bottle games."),
+        "{stdout}"
+    );
+    assert!(home.bottle("games").join("system.reg").is_file());
+    let calls = home.calls();
+    assert!(calls[0].starts_with("wine wineboot -u |"), "{calls:#?}");
+    assert!(
+        calls.iter().any(|call| call.starts_with("wine regedit /S")),
+        "{calls:#?}"
+    );
+    assert_eq!(home.json(&["bottle", "info", "games"])["initialized"], true);
+}
+
+#[test]
+fn steam_install_finishes_a_half_made_bottle_first() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_half_made_bottle("b", FAKE_WINE);
+    let output = home
+        .uncork()
+        .args(["steam", "install", "-b", "b"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Finished creating bottle b."), "{stdout}");
+    // Then it stops at the download question (no terminal, no --yes).
+    assert!(!output.status.success());
+    assert!(stderr.contains("--yes"), "{stderr}");
 }
 
 #[test]

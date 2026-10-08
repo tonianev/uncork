@@ -175,6 +175,31 @@ pub(super) fn create_bottle(
     Ok(created)
 }
 
+/// Finish creating `bottle` when a failed `create` left it incomplete
+/// ([`Bottle::is_initialized`]), with `wine` (the bottle's own); nothing
+/// to do otherwise.
+pub(super) fn ensure_initialized(
+    ctx: &Ctx,
+    bottle: &mut Bottle,
+    wine: &WineRuntime,
+) -> anyhow::Result<()> {
+    if bottle.is_initialized() {
+        return Ok(());
+    }
+    let name = bottle.config.name.clone();
+    eprintln!(
+        "Bottle {name} was not completely created; finishing it with Wine {} (this takes about a minute)",
+        wine.version
+    );
+    bottle::finish_create(&ctx.layout, bottle, wine).with_context(|| {
+        format!(
+            "cannot finish creating bottle {name}; delete it with `uncork bottle delete {name}` and try again"
+        )
+    })?;
+    println!("Finished creating bottle {name}.");
+    Ok(())
+}
+
 /// `bottle info --json`.
 #[derive(Debug, Serialize)]
 struct BottleInfoView<'a> {
@@ -332,30 +357,59 @@ fn set(ctx: &Ctx, name: &str, settings: &[String]) -> anyhow::Result<ExitCode> {
         println!("Nothing changed in bottle {name}.");
         return Ok(ExitCode::SUCCESS);
     }
-    bottle.save_config()?;
+
+    // The registry goes first: uncork.toml only records a Retina or Windows
+    // version change once the prefix has it, so a failed update is retried
+    // by running the same command again. A bottle that is not initialized
+    // yet gets the registry from its config when it is.
+    let registry_changed = bottle.config.performance.retina != before.performance.retina
+        || bottle.config.windows_version != before.windows_version;
+    let registry_updated = registry_changed && bottle.is_initialized();
+    if registry_updated {
+        let wine = bottle_wine(&ctx.layout, &bottle).context(
+            "the bottle's registry must change too, and nothing was changed; run this command again once that Wine is installed",
+        )?;
+        bottle::apply_registry(&bottle, &wine, &bottle::default_registry(&bottle.config))
+            .context("cannot update the bottle's registry; nothing was changed")?;
+    }
+    if let Err(err) = bottle.save_config() {
+        if registry_updated {
+            restore_registry(ctx, &bottle, &before);
+        }
+        return Err(err.into());
+    }
     for change in &changes {
         println!("{name}: {change}");
     }
-
-    let registry_changed = bottle.config.performance.retina != before.performance.retina
-        || bottle.config.windows_version != before.windows_version;
-    if registry_changed && bottle.is_initialized() {
-        match bottle_wine_if_installed(&ctx.layout, &bottle) {
-            Some(wine) => {
-                bottle::apply_registry(&bottle, &wine, &bottle::default_registry(&bottle.config))
-                    .context("cannot update the bottle's registry")?;
-                println!("Updated the bottle's registry (Retina mode, Windows version).");
-            }
-            None => eprintln!(
-                "note: Wine {} is not installed, so the bottle's registry was not updated; run this command again after installing it",
-                bottle.config.wine
-            ),
-        }
+    if registry_updated {
+        println!("Updated the bottle's registry (Retina mode, Windows version).");
+    }
+    if bottle.config.performance.msync != before.performance.msync
+        || bottle.config.wine != before.wine
+    {
+        eprintln!(
+            "note: every Wine process of a bottle must share its msync setting and Wine; if anything is running in {name}, stop it with `uncork bottle kill {name}` before the next launch"
+        );
     }
     if bottle.config.performance.game_mode && !before.performance.game_mode {
         eprintln!("note: Game Mode launching is experimental (docs/PERFORMANCE.md).");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Put the registry of `before` back after its config could not be saved.
+fn restore_registry(ctx: &Ctx, bottle: &Bottle, before: &BottleConfig) {
+    let previous = Bottle {
+        config: before.clone(),
+        ..bottle.clone()
+    };
+    let restored = bottle_wine(&ctx.layout, &previous).and_then(|wine| {
+        bottle::apply_registry(&previous, &wine, &bottle::default_registry(before))
+            .map_err(anyhow::Error::from)
+    });
+    if let Err(err) = restored {
+        eprintln!("warning: cannot restore the bottle's previous registry: {err:#}");
+    }
 }
 
 /// Apply one `key=value` to `config`; returns a description of the change.

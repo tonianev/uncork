@@ -55,7 +55,7 @@ pub(super) fn run(ctx: &Ctx, args: &SetupArgs) -> anyhow::Result<ExitCode> {
         super::runtime::install_entry(ctx, entry)?;
     }
 
-    let bottle = match existing {
+    let mut bottle = match existing {
         Some(bottle) => {
             println!(
                 "Bottle {} already exists ({}).",
@@ -69,6 +69,15 @@ pub(super) fn run(ctx: &Ctx, args: &SetupArgs) -> anyhow::Result<ExitCode> {
             super::bottle::create_bottle(ctx, &args.bottle, &wine, &CreateOptions::default())?
         }
     };
+    // A bottle an interrupted setup left half-made is finished first, with
+    // the boot steps' watchdog and registry defaults.
+    let wine = if args.no_steam && bottle.is_initialized() {
+        None
+    } else {
+        let wine = super::bottle_wine(&ctx.layout, &bottle)?;
+        super::bottle::ensure_initialized(ctx, &mut bottle, &wine)?;
+        Some(wine)
+    };
 
     let mut config = ctx.config()?;
     if config.default_bottle != args.bottle {
@@ -77,11 +86,10 @@ pub(super) fn run(ctx: &Ctx, args: &SetupArgs) -> anyhow::Result<ExitCode> {
         println!("Default bottle is now {}.", args.bottle);
     }
 
-    if args.no_steam {
+    let Some(wine) = wine.filter(|_| !args.no_steam) else {
         println!("Components and bottle are ready. Install Steam later with: uncork steam install");
         return Ok(ExitCode::SUCCESS);
-    }
-    let wine = super::bottle_wine(&ctx.layout, &bottle)?;
+    };
     super::steam::install_and_start(ctx, &bottle, &wine)
 }
 
