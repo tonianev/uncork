@@ -268,7 +268,8 @@ pub struct PlanContext<'a> {
 ///   request that differs from the bottle's setting becomes a warning.
 /// - Frame cap ([`LaunchPlan::frame_cap`], DXMT only): the profile's
 ///   `performance.max_fps`, else the bottle's, else the main display's
-///   refresh rate rounded to whole Hz, else [`DEFAULT_MAX_FPS`]; `0` is
+///   refresh rate in whole Hz, rounded up ([`Display::frame_cap_hz`]),
+///   else [`DEFAULT_MAX_FPS`]; `0` is
 ///   uncapped. An explicit value that does not divide the display's refresh
 ///   rate gets a warning (DXMT needs one that does). A `DXMT_CONFIG` from
 ///   the bottle, the profile or `--env` keeps the cap appended to its own
@@ -414,7 +415,7 @@ fn choose_frame_cap(ctx: PlanContext<'_>, performance: &Performance) -> FrameCap
         Some((fps, source)) => (*fps, source.clone()),
         None => match ctx
             .display
-            .and_then(|display| display.refresh_rounded().map(|hz| (hz, display.describe())))
+            .and_then(|display| display.frame_cap_hz().map(|hz| (hz, display.describe())))
         {
             Some((hz, display)) => (hz, format!("the main display's refresh rate ({display})")),
             None => (

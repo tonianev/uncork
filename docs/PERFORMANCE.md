@@ -19,7 +19,7 @@ This document lists every setting Uncork uses to make games run fast on Apple Si
 | `performance.msync` | On. Effective only when the Wine runtime has the `msync` feature, which the catalog's runtime has | Sets `WINEMSYNC=1` for every process in the bottle, wineserver included | [msync](#msync) |
 | `performance.avx` | On | Sets `ROSETTA_ADVERTISE_AVX=1` | [AVX under Rosetta](#avx-under-rosetta) |
 | `performance.retina` | Off | Mac driver `RetinaMode`, and the DPI to match: `LogPixels` 96 off, 192 on | [Retina mode and DPI](#retina-mode-and-dpi) |
-| `performance.max_fps` | The main display's refresh rate, rounded (60 when unknown) | `DXMT_CONFIG=d3d11.preferredMaxFrameRate=<n>` for DXMT games; `0` uncaps. A profile's `max_fps` wins over the bottle's | [Frame cap](#frame-cap) |
+| `performance.max_fps` | The main display's refresh rate, rounded up (60 when unknown) | `DXMT_CONFIG=d3d11.preferredMaxFrameRate=<n>` for DXMT games; `0` uncaps. A profile's `max_fps` wins over the bottle's | [Frame cap](#frame-cap) |
 | `performance.hud` | Off | Sets `MTL_HUD_ENABLED=1` | [Metal HUD](#metal-performance-hud) |
 | `performance.metalfx` | Off | `DXMT_METALFX_SPATIAL_SWAPCHAIN=1` (DXMT, not in a Retina bottle) or `D3DM_ENABLE_METALFX=1` (D3DMetal) | [MetalFX](#metalfx) |
 | `performance.game_mode` | Off (experimental, not recommended) | Launch through a games-category app bundle; `--game-mode` does it for one launch. Rise of Nations crashed at startup in 3 of 5 such launches | [Game Mode](#game-mode) |
@@ -116,7 +116,7 @@ DXMT paces frames itself (it turns the Metal layer's display sync off). Without 
 
 1. the profile's `[performance] max_fps`, else
 2. the bottle's `performance.max_fps` (`uncork bottle set <bottle> performance.max_fps=60`), else
-3. the main display's refresh rate, rounded to whole Hz (120 on a MacBook Pro's built-in display, 60 on most external displays), else
+3. the main display's refresh rate in whole Hz (120 on a MacBook Pro's built-in display, 60 on most external displays), rounded up when it is fractional (60 for 59.94 Hz): DXMT shows each frame for at least 1/`n` seconds, so a cap just below the refresh rate would hold every frame for two refreshes, else
 4. 60, when the refresh rate is unknown.
 
 `max_fps = 0` leaves the cap out. `n` must divide the display's refresh rate, so 60 is safe on both 60 and 120 Hz displays; an explicit value that does not divide it gets a plan warning. A `DXMT_CONFIG` in the bottle's or the profile's `env`, or from `-e`, gets the cap appended to its own options (`dxgi.handleAltTab=1;d3d11.preferredMaxFrameRate=120`), unless it sets `d3d11.preferredMaxFrameRate` itself, which then is the cap. `--dry-run` prints the cap and where it came from. Other backends get no cap from Uncork; D3DMetal has `D3DM_MAX_FPS` (below).

@@ -81,6 +81,24 @@ impl Display {
             })
     }
 
+    /// The frame cap that paces to this display: its refresh rate in whole
+    /// Hz, rounded *up* when it is fractional (`59.94` → 60, `60.4` → 61;
+    /// within 0.01 Hz of a whole number it is that number). DXMT presents
+    /// each frame after the previous one was shown for at least 1/cap
+    /// seconds; a cap just below the refresh rate would make every frame
+    /// wait for a second refresh and halve the frame rate, one at or just
+    /// above it shows a frame at every refresh.
+    #[must_use]
+    pub fn frame_cap_hz(&self) -> Option<u32> {
+        let rounded = self.refresh_rounded()?;
+        let hz = self.refresh_hz?;
+        if hz - f64::from(rounded) > 0.01 {
+            Some(rounded + 1)
+        } else {
+            Some(rounded)
+        }
+    }
+
     /// What identifies the main display for a running bottle:
     /// `<name> <width>x<height>` (`Color LCD 1728x1117`). A different
     /// signature means Wine's view of the main display is out of date: the
@@ -562,6 +580,32 @@ mod tests {
         };
         assert_eq!(odd.refresh_rounded(), None);
         assert_eq!(odd.describe(), "Color LCD 1728x1117");
+    }
+
+    #[test]
+    fn the_frame_cap_rounds_fractional_rates_up() {
+        let at = |hz| Display {
+            refresh_hz: Some(hz),
+            ..built_in()
+        };
+        for (hz, cap) in [
+            (120.0, 120),
+            (120.004, 120),
+            (119.996, 120),
+            (59.94, 60),
+            (60.4, 61),
+            (143.98, 144),
+            (74.6, 75),
+            (23.976, 24),
+        ] {
+            assert_eq!(at(hz).frame_cap_hz(), Some(cap), "{hz}");
+        }
+        assert_eq!(at(60.4).refresh_rounded(), Some(60), "INI values round");
+        let unknown = Display {
+            refresh_hz: None,
+            ..built_in()
+        };
+        assert_eq!(unknown.frame_cap_hz(), None);
     }
 
     #[test]

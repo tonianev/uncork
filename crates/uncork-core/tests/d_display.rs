@@ -501,6 +501,23 @@ fn the_frame_cap_follows_the_main_display() {
         unknown.frame_cap.unwrap().source,
         "the default (the main display's refresh rate is unknown)"
     );
+    // A fractional rate: the cap is rounded up, never below the rate.
+    let tv = plan(Some(Display {
+        name: "TV".to_owned(),
+        refresh_hz: Some(59.94),
+        ..external()
+    }));
+    assert_eq!(dxmt_config(&tv), Some("d3d11.preferredMaxFrameRate=60"));
+    assert_eq!(
+        tv.frame_cap.unwrap().source,
+        "the main display's refresh rate (TV 2560x1440 @59.94Hz)"
+    );
+    let odd = plan(Some(Display {
+        refresh_hz: Some(60.4),
+        ..external()
+    }));
+    assert_eq!(dxmt_config(&odd), Some("d3d11.preferredMaxFrameRate=61"));
+
     let no_refresh = Display {
         refresh_hz: None,
         ..external()
