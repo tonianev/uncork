@@ -33,7 +33,8 @@
 //! A game gets its own backend by being started *directly* in the same
 //! prefix and wineserver while Steam runs ([`LaunchMode::Direct`]):
 //! Steamworks finds the client through
-//! `HKCU\Software\Valve\Steam\ActiveProcess`. Games whose DRM needs
+//! `HKCU\Software\Valve\Steam\ActiveProcess`, and the game gets
+//! `SteamAppId`/`SteamGameId` as if Steam had started it. Games whose DRM needs
 //! Steam to start them use [`LaunchMode::Applaunch`]: `steam.exe -applaunch
 //! <appid>`, where the game inherits the client's environment, so Uncork
 //! restarts Steam with the game's backend environment first.
@@ -760,11 +761,12 @@ fn describe_exit(status: ExitStatus) -> String {
 
 /// Start Steam (`-silent`) if it is not running and wait until
 /// [`is_running`] reports it, polling every 2 s up to `timeout`. Calls
-/// [`ensure_client_dxvk`] first (with the newest installed DXVK).
+/// [`prepare_client_dxvk`] first.
 ///
 /// The DXVK used is the bottle's `graphics.dxvk` pin, else the newest
 /// installed; without one the client still starts (with a warning: its
-/// windows will be black). A running client is left alone, DLLs included.
+/// windows will be black). A running client is left alone, DLLs included;
+/// a stale pid does not count as one ([`is_running`]).
 ///
 /// # Errors
 /// [`crate::Error::Command`] on timeout, naming the client log.
