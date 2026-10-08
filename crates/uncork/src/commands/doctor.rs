@@ -45,7 +45,8 @@ pub(super) fn run(ctx: &Ctx) -> anyhow::Result<ExitCode> {
         .position(|check| check.id == "crossover")
         .unwrap_or(checks.len());
     checks.splice(at..at, dpi);
-    let failed = checks.iter().filter(|c| c.status == Status::Fail).count();
+    let count = |status: Status| checks.iter().filter(|c| c.status == status).count();
+    let failed = count(Status::Fail);
 
     if ctx.json {
         output::print_json(&DoctorView {
@@ -61,17 +62,38 @@ pub(super) fn run(ctx: &Ctx) -> anyhow::Result<ExitCode> {
         println!();
         print!("{}", render_checks(&checks));
         println!();
-        match failed {
-            0 => println!("No problems that stop games from running."),
-            1 => println!("1 problem must be fixed before games can run."),
-            n => println!("{n} problems must be fixed before games can run."),
-        }
+        println!("{}", summary(failed, count(Status::Warn)));
     }
     Ok(if failed == 0 {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// The last line of the report. Warnings are named there too: some of
+/// them break particular games (a bottle whose Retina mode and DPI
+/// disagree crashes Rise of Nations), and a reader who skims to the end
+/// should not miss them.
+fn summary(failed: usize, warned: usize) -> String {
+    let warnings = match warned {
+        1 => "1 warning above".to_owned(),
+        n => format!("{n} warnings above"),
+    };
+    match (failed, warned) {
+        (0, 0) => "No problems that stop games from running.".to_owned(),
+        (0, _) => format!(
+            "No problems that stop games from running, but the {warnings} can still affect some games."
+        ),
+        (1, 0) => "1 problem must be fixed before games can run.".to_owned(),
+        (n, 0) => format!("{n} problems must be fixed before games can run."),
+        (1, _) => format!(
+            "1 problem must be fixed before games can run, and the {warnings} can affect some games."
+        ),
+        (n, _) => format!(
+            "{n} problems must be fixed before games can run, and the {warnings} can affect some games."
+        ),
+    }
 }
 
 /// `ok    summary` rows (status padded to four characters) with
@@ -99,6 +121,31 @@ fn label(status: Status) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_line_names_failures_and_warnings() {
+        assert_eq!(summary(0, 0), "No problems that stop games from running.");
+        assert_eq!(
+            summary(0, 1),
+            "No problems that stop games from running, but the 1 warning above can still affect some games."
+        );
+        assert_eq!(
+            summary(0, 2),
+            "No problems that stop games from running, but the 2 warnings above can still affect some games."
+        );
+        assert_eq!(
+            summary(1, 0),
+            "1 problem must be fixed before games can run."
+        );
+        assert_eq!(
+            summary(2, 0),
+            "2 problems must be fixed before games can run."
+        );
+        assert_eq!(
+            summary(2, 3),
+            "2 problems must be fixed before games can run, and the 3 warnings above can affect some games."
+        );
+    }
 
     #[test]
     fn rows_are_aligned_with_fixes_underneath() {

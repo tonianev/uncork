@@ -311,6 +311,14 @@ fn bottle_set_repairs_a_retina_and_dpi_pair_that_disagrees() {
         check["fix"],
         "uncork bottle set cx performance.retina=false"
     );
+    // The last line does not hide it behind "no problems".
+    let report = home.uncork().arg("doctor").output().unwrap();
+    let report = String::from_utf8(report.stdout).unwrap();
+    let last = report.lines().last().unwrap();
+    assert!(
+        last.contains("warnings above") && last.ends_with("affect some games."),
+        "{report}"
+    );
 
     // The fix rewrites the registry although uncork.toml stays the same.
     let regedits = |home: &Home| {

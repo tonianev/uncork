@@ -71,7 +71,7 @@ Options:
 
 ## uncork doctor
 
-The checks, their levels and their fixes are listed in [ARCHITECTURE.md](ARCHITECTURE.md#doctor). A missing DXVK is a warning: the Steam client's windows stay black without it. So is a bottle whose registry has a Retina mode and DPI that disagree (`bottle-dpi`), read from its `user.reg`; the fix it names is `uncork bottle set <bottle> performance.retina=<its setting>`.
+The checks, their levels and their fixes are listed in [ARCHITECTURE.md](ARCHITECTURE.md#doctor). A missing DXVK is a warning: the Steam client's windows stay black without it. So is a bottle whose registry has a Retina mode and DPI that disagree (`bottle-dpi`), read from its `user.reg`; the fix it names is `uncork bottle set <bottle> performance.retina=<its setting>`. Warnings do not make `doctor` fail, but its last line counts them, since some break particular games (Rise of Nations crashes in a bottle whose pair disagrees).
 
 ```text
 Check this Mac and the Uncork installation, and say how to fix problems
