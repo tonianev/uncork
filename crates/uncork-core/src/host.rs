@@ -12,7 +12,7 @@ use std::str::FromStr;
 
 use serde::Serialize;
 
-use crate::bottle::Bottle;
+use crate::bottle::{Bottle, DisplayRegistry};
 use crate::component::{ComponentKind, InstalledComponent};
 
 /// Whether Rosetta 2 can run x86-64 code.
@@ -169,6 +169,9 @@ pub const LOW_DISK_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 /// | `bottles` | Ok: "N bottles". Info: none | `uncork setup` |
 /// | `bottle-wine` | Warn, once per bottle whose `wine` version is not installed | `uncork runtime install wine` or `uncork bottle set <name> wine=<v>` |
 /// | `crossover` | Info when `CrossOver.app` is installed: "bottles can be imported with `uncork bottle import`". Omitted otherwise | — |
+///
+/// The `bottle-dpi` checks need each bottle's `user.reg` and come from
+/// [`bottle_dpi`]; `doctor` puts them after the `bottle-wine` checks.
 ///
 /// A check carries its row's fix whenever its status is not Ok.
 /// `components` is expected in [`crate::component::list_installed`] order
@@ -428,6 +431,39 @@ fn bottle_wine(
             ))
         })
         .collect()
+}
+
+/// The `bottle-dpi` check of one bottle, from its registry as `user.reg`
+/// has it ([`DisplayRegistry::read`]): Warn when Retina mode and the DPI
+/// disagree ([`DisplayRegistry::disagrees`]: programs that are not
+/// DPI-aware then see a screen of the wrong size, and full-screen games
+/// render cropped and offset or crash), or when they differ from the
+/// bottle's `performance.retina` ([`DisplayRegistry::differs_from`]).
+/// The fix, `uncork bottle set <name> performance.retina=<its
+/// performance.retina>`, rewrites the pair to match `uncork.toml`. `None`
+/// when the registry matches.
+#[must_use]
+pub fn bottle_dpi(bottle: &Bottle, registry: &DisplayRegistry) -> Option<Check> {
+    let name = &bottle.config.name;
+    let retina = bottle.config.performance.retina;
+    let summary = if registry.disagrees() {
+        format!(
+            "bottle {name:?}: Retina mode and DPI disagree ({}), so games that are not DPI-aware see a screen of the wrong size",
+            registry.describe()
+        )
+    } else if registry.differs_from(retina) {
+        format!(
+            "bottle {name:?}: its registry ({}) does not match performance.retina = {retina} in uncork.toml",
+            registry.describe()
+        )
+    } else {
+        return None;
+    };
+    Some(
+        Check::new("bottle-dpi", Status::Warn, summary).with_fix(format!(
+            "uncork bottle set {name} performance.retina={retina}"
+        )),
+    )
 }
 
 fn crossover(host: &HostInfo) -> Option<Check> {
@@ -1011,6 +1047,52 @@ mod tests {
             &[bottle("steam", "11.17")],
             "bottle-wine",
         );
+    }
+
+    #[test]
+    fn bottle_dpi_row_names_the_fix_that_matches_the_config() {
+        let pair = |retina_mode, log_pixels| DisplayRegistry {
+            retina_mode,
+            log_pixels,
+        };
+        let steam = bottle("steam", "11.17");
+        let mut retina = bottle("hires", "11.17");
+        retina.config.performance.retina = true;
+
+        // Seen on 2026-10-08: Uncork's RetinaMode n next to CrossOver's 192.
+        let check = bottle_dpi(&steam, &pair(Some(false), Some(192))).unwrap();
+        assert_eq!((check.id, check.status), ("bottle-dpi", Status::Warn));
+        assert_eq!(
+            check.summary,
+            "bottle \"steam\": Retina mode and DPI disagree (RetinaMode n, LogPixels 192), so games that are not DPI-aware see a screen of the wrong size"
+        );
+        assert_eq!(
+            check.fix.as_deref(),
+            Some("uncork bottle set steam performance.retina=false")
+        );
+        let check = bottle_dpi(&retina, &pair(None, Some(192))).unwrap();
+        assert!(check.summary.contains("disagree"), "{check:?}");
+        assert_eq!(
+            check.fix.as_deref(),
+            Some("uncork bottle set hires performance.retina=true")
+        );
+
+        // A consistent pair that is not the bottle's.
+        let check = bottle_dpi(&steam, &pair(Some(true), Some(192))).unwrap();
+        assert_eq!(
+            check.summary,
+            "bottle \"steam\": its registry (RetinaMode y, LogPixels 192) does not match performance.retina = false in uncork.toml"
+        );
+
+        for (bottle, registry) in [
+            (&steam, pair(Some(false), Some(96))),
+            (&steam, pair(None, None)),
+            (&steam, pair(Some(false), None)),
+            (&retina, pair(Some(true), Some(192))),
+            (&retina, pair(Some(true), None)),
+        ] {
+            assert_eq!(bottle_dpi(bottle, &registry), None, "{registry:?}");
+        }
     }
 
     #[test]

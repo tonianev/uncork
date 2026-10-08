@@ -341,19 +341,33 @@ const SETTABLE_KEYS: &[&str] = &[
     "dll_overrides.<dll>",
 ];
 
+/// Keys whose values live in the prefix's registry as well (Retina mode
+/// with its DPI, the Windows version).
+const REGISTRY_KEYS: [&str; 3] = ["performance.retina", "windows_version", "windows"];
+
 fn set(ctx: &Ctx, name: &str, settings: &[String]) -> anyhow::Result<ExitCode> {
     let mut bottle = Bottle::open_named(&ctx.layout, name)?;
     let before = bottle.config.clone();
     let mut changes = Vec::new();
+    let mut registry_named = false;
     for setting in settings {
         let (key, value) = setting
             .split_once('=')
             .ok_or_else(|| anyhow!("expected key=value, got {setting:?}"))?;
-        let change = apply_setting(&ctx.layout, &mut bottle.config, key.trim(), value)
-            .with_context(|| format!("cannot set {}", key.trim()))?;
+        let key = key.trim();
+        registry_named |= REGISTRY_KEYS.contains(&key);
+        let change = apply_setting(&ctx.layout, &mut bottle.config, key, value)
+            .with_context(|| format!("cannot set {key}"))?;
         changes.push(change);
     }
-    if bottle.config == before {
+    // Naming a registry key also repairs a prefix whose Retina mode and DPI
+    // do not match uncork.toml (an imported CrossOver bottle, say), even
+    // when uncork.toml stays the same.
+    let registry_stale = registry_named
+        && bottle.is_initialized()
+        && bottle::DisplayRegistry::read(&bottle.path)
+            .is_some_and(|registry| registry.differs_from(bottle.config.performance.retina));
+    if bottle.config == before && !registry_stale {
         println!("Nothing changed in bottle {name}.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -362,15 +376,21 @@ fn set(ctx: &Ctx, name: &str, settings: &[String]) -> anyhow::Result<ExitCode> {
     // version change once the prefix has it, so a failed update is retried
     // by running the same command again. A bottle that is not initialized
     // yet gets the registry from its config when it is.
-    let registry_changed = bottle.config.performance.retina != before.performance.retina
+    let registry_changed = registry_stale
+        || bottle.config.performance.retina != before.performance.retina
         || bottle.config.windows_version != before.windows_version;
     let registry_updated = registry_changed && bottle.is_initialized();
+    let mut stopped = false;
     if registry_updated {
         let wine = bottle_wine(&ctx.layout, &bottle).context(
             "the bottle's registry must change too, and nothing was changed; run this command again once that Wine is installed",
         )?;
-        bottle::apply_registry(&bottle, &wine, &bottle::default_registry(&bottle.config))
-            .context("cannot update the bottle's registry; nothing was changed")?;
+        stopped = bottle::apply_registry_stopped(
+            &bottle,
+            &wine,
+            &bottle::default_registry(&bottle.config),
+        )
+        .context("cannot update the bottle's registry; nothing was changed")?;
     }
     if let Err(err) = bottle.save_config() {
         if registry_updated {
@@ -381,8 +401,22 @@ fn set(ctx: &Ctx, name: &str, settings: &[String]) -> anyhow::Result<ExitCode> {
     for change in &changes {
         println!("{name}: {change}");
     }
+    if stopped {
+        println!(
+            "Stopped the Windows programs that were running in bottle {name} (Steam included): Wine reads these settings when a bottle starts. Start them again with `uncork play` or `uncork steam start`."
+        );
+    }
     if registry_updated {
-        println!("Updated the bottle's registry (Retina mode, Windows version).");
+        let dpi = bottle::dpi_for(bottle.config.performance.retina);
+        println!(
+            "Updated the bottle's registry (Retina mode {}, {dpi} DPI, Windows version {}).",
+            if bottle.config.performance.retina {
+                "on"
+            } else {
+                "off"
+            },
+            bottle.config.windows_version.winecfg_name()
+        );
     }
     if bottle.config.performance.msync != before.performance.msync
         || bottle.config.wine != before.wine
@@ -404,7 +438,7 @@ fn restore_registry(ctx: &Ctx, bottle: &Bottle, before: &BottleConfig) {
         ..bottle.clone()
     };
     let restored = bottle_wine(&ctx.layout, &previous).and_then(|wine| {
-        bottle::apply_registry(&previous, &wine, &bottle::default_registry(before))
+        bottle::apply_registry_stopped(&previous, &wine, &bottle::default_registry(before))
             .map_err(anyhow::Error::from)
     });
     if let Err(err) = restored {
@@ -659,7 +693,40 @@ fn import(ctx: &Ctx, source: &Path, name: Option<&str>, move_: bool) -> anyhow::
             "The prefix's Windows user is {user:?}, so the bottle runs Wine with USER={user} and LOGNAME={user} to keep its AppData (sign-ins, game settings)."
         );
     }
+    apply_imported_display(&imported, &wine);
     Ok(ExitCode::SUCCESS)
+}
+
+/// Make an imported bottle's Retina mode and DPI a consistent pair from
+/// the first launch: `bottle::import` kept the prefix's choice in
+/// `performance.retina`; write the matching registry now. A failure is a
+/// warning naming the command that retries it.
+fn apply_imported_display(imported: &Bottle, wine: &WineRuntime) {
+    let name = &imported.config.name;
+    let retina = imported.config.performance.retina;
+    let found = bottle::DisplayRegistry::read(&imported.path).unwrap_or_default();
+    let dpi = bottle::dpi_for(retina);
+    eprintln!(
+        "Writing Retina mode and DPI into the bottle's registry (Wine may update the prefix first; that can take a minute)"
+    );
+    let on_off = if retina { "on" } else { "off" };
+    match bottle::apply_registry_stopped(
+        imported,
+        wine,
+        &bottle::default_registry(&imported.config),
+    ) {
+        Ok(_) if found == bottle::DisplayRegistry::default() => println!(
+            "The prefix set neither Retina mode nor its DPI, so the bottle has Uncork's default: Retina mode off with {dpi} DPI; change it with `uncork bottle set {name} performance.retina=true`."
+        ),
+        Ok(_) => println!(
+            "The prefix had {}, so Retina mode stays {on_off} (performance.retina = {retina}) with {dpi} DPI to match; change it with `uncork bottle set {name} performance.retina={}`.",
+            found.describe(),
+            !retina
+        ),
+        Err(err) => eprintln!(
+            "warning: cannot write Retina mode and DPI into bottle {name}'s registry: {err}; run `uncork bottle set {name} performance.retina={retina}` to try again"
+        ),
+    }
 }
 
 fn kill(ctx: &Ctx, name: &str) -> anyhow::Result<ExitCode> {

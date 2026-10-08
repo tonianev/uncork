@@ -101,10 +101,12 @@ pub enum LaunchMode {
 /// How often [`ensure_running`] and [`stop`] ask whether the client runs.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How long [`play`] in [`LaunchMode::Applaunch`] mode gives a running
-/// client to exit after `-shutdown` before it stops the bottle with
-/// `wineserver --kill` (measured: `-shutdown` alone can take over a minute).
-pub const APPLAUNCH_SHUTDOWN_GRACE: Duration = Duration::from_secs(15);
+/// How long a running client gets to exit after `-shutdown` whenever Uncork
+/// restarts a bottle ([`play`] in [`LaunchMode::Applaunch`] mode, a changed
+/// main display, a Retina, DPI or Windows-version change) before the bottle
+/// is stopped with `wineserver --kill` (measured: `-shutdown` alone can take
+/// over a minute).
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(15);
 
 /// The variables Steam sets for the games it starts, set to the app id in
 /// [`LaunchMode::Direct`] mode so Steamworks knows the game (and does not
@@ -504,6 +506,70 @@ fn stop_with(
     forget_client(bottle, wine)
 }
 
+/// Stop everything that runs in `bottle`, the Steam client cleanly where it
+/// can, so that the next Wine process starts a fresh wineserver (which
+/// reads the displays, Retina mode and the DPI anew). Returns `false`
+/// without doing anything when no wineserver runs
+/// ([`server_running`]), `true` after stopping one:
+///
+/// 1. When Steam is installed in the bottle, [`stop`] it: a running client
+///    gets `-shutdown` and `grace` to exit before `wineserver --kill`.
+/// 2. `wineserver --kill` ends whatever is left (games, Wine's own
+///    services); it failing because nothing is left is fine.
+/// 3. When Steam is installed, reset its running marker ([`forget_client`];
+///    a failure is logged), since a killed client cannot.
+/// 4. `wineserver --wait`, so the wineserver step 3 started has exited.
+///
+/// The kill's output goes to `logs/<bottle>-stop.log`.
+///
+/// # Errors
+/// Command errors.
+pub fn stop_bottle(bottle: &Bottle, wine: &WineRuntime, grace: Duration) -> crate::Result<bool> {
+    stop_bottle_with(bottle, wine, grace, POLL_INTERVAL)
+}
+
+/// [`stop_bottle`] with a configurable polling interval.
+fn stop_bottle_with(
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    grace: Duration,
+    poll: Duration,
+) -> crate::Result<bool> {
+    if !server_running(bottle, wine)? {
+        return Ok(false);
+    }
+    let name = &bottle.config.name;
+    tracing::info!("stopping every Windows program in bottle {name}");
+    let steam = SteamInstall::find(bottle.prefix()).is_some();
+    if steam {
+        stop_with(bottle, wine, grace, poll)?;
+    }
+    let kill = CommandSpec {
+        log: Some(crate::launch::logs_dir_for(bottle).join(format!(
+            "{}-stop.log",
+            crate::launch::sanitize_file_part(name)
+        ))),
+        ..crate::launch::in_bottle(wine.kill_command(bottle.prefix()), bottle, wine)
+    };
+    match crate::process::run(&kill) {
+        Ok(()) => {}
+        // `wineserver --kill` exits 1 when nothing was left to stop.
+        Err(Error::Command { status, .. }) if status.starts_with("exited") => {
+            tracing::debug!("wineserver --kill in bottle {name}: {status}");
+        }
+        Err(err) => return Err(err),
+    }
+    if steam && let Err(err) = forget_client(bottle, wine) {
+        tracing::warn!("cannot reset Steam's running marker in bottle {name}: {err}");
+    }
+    crate::process::run(&crate::launch::in_bottle(
+        wine.wait_command(bottle.prefix()),
+        bottle,
+        wine,
+    ))?;
+    Ok(true)
+}
+
 /// Record that no Steam client runs in `bottle` (set
 /// `HKCU\Software\Valve\Steam\ActiveProcess\pid` to 0 with `wine reg add`).
 /// For after the bottle's processes were killed: a killed client leaves its
@@ -624,34 +690,55 @@ fn zero_active_pid(text: &[u8]) -> Option<Vec<u8>> {
 /// msync setting differs from the running wineserver's) is an error whose
 /// message includes its output and suggests `uncork bottle kill <bottle>`.
 pub fn is_running(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<bool> {
-    // Asked before the query, which starts a wineserver of its own.
-    let server = server_running(bottle, wine)?;
-    let Some(pid) = active_pid(bottle, wine)? else {
-        return Ok(false);
-    };
-    if pid == 0 {
-        return Ok(false);
-    }
-    if server {
-        return Ok(true);
-    }
-    tracing::info!(
-        "Steam's ActiveProcess pid {pid:#x} in bottle {} is left over from a client that did not exit cleanly (no wineserver was running); clearing it",
-        bottle.config.name
-    );
-    if let Err(err) = forget_client(bottle, wine) {
-        tracing::warn!(
-            "cannot clear Steam's stale running marker in bottle {}: {err}",
-            bottle.config.name
-        );
-    }
-    Ok(false)
+    client_status(bottle, wine).map(|status| status.running)
 }
 
-/// Whether a wineserver runs for `bottle` ([`WineRuntime::server_probe_command`]).
-/// An exit status other than 0 or 1 means the answer is unknown, which
-/// counts as running, so a pid is never thrown away on a guess.
-fn server_running(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<bool> {
+/// What [`client_status`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientStatus {
+    /// A wineserver ran for the bottle before the query (which starts one).
+    pub server: bool,
+    /// The Steam client runs ([`is_running`]).
+    pub running: bool,
+}
+
+/// [`is_running`], also saying whether a wineserver ran before the query:
+/// when none did, whatever Uncork starts next begins a new Wine session.
+///
+/// # Errors
+/// As [`is_running`].
+pub fn client_status(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<ClientStatus> {
+    // Asked before the query, which starts a wineserver of its own.
+    let server = server_running(bottle, wine)?;
+    let running = match active_pid(bottle, wine)? {
+        None | Some(0) => false,
+        Some(_) if server => true,
+        Some(pid) => {
+            tracing::info!(
+                "Steam's ActiveProcess pid {pid:#x} in bottle {} is left over from a client that did not exit cleanly (no wineserver was running); clearing it",
+                bottle.config.name
+            );
+            if let Err(err) = forget_client(bottle, wine) {
+                tracing::warn!(
+                    "cannot clear Steam's stale running marker in bottle {}: {err}",
+                    bottle.config.name
+                );
+            }
+            false
+        }
+    };
+    Ok(ClientStatus { server, running })
+}
+
+/// Whether a wineserver runs for `bottle`
+/// ([`WineRuntime::server_probe_command`], with the bottle's environment;
+/// output captured). An exit status other than 0 or 1 means the answer is
+/// unknown, which counts as running, so nothing is thrown away or skipped
+/// on a guess.
+///
+/// # Errors
+/// [`crate::Error::Command`] when `wineserver` cannot be started.
+pub fn server_running(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<bool> {
     let spec = crate::launch::in_bottle(wine.server_probe_command(bottle.prefix()), bottle, wine);
     let output = quiet_output(&spec, "wineserver")?;
     match output.status.code() {
@@ -1131,7 +1218,7 @@ pub struct PlayOutcome {
 /// The launch mode is the profile's ([`GameProfile::launch_mode`]), and
 /// [`LaunchMode::Direct`] without a profile. `%INSTALLDIR%` in INI paths is
 /// the app's install directory. In `Applaunch` mode a running client gets
-/// [`APPLAUNCH_SHUTDOWN_GRACE`] (at most `steam_timeout`) to exit before the
+/// [`SHUTDOWN_GRACE`] (at most `steam_timeout`) to exit before the
 /// bottle is stopped with `wineserver --kill`, `steam_timeout` bounds
 /// starting the new one, the plan's backend files are put in place first,
 /// the game arguments are the profile's `launch.args` then `args`, and the
@@ -1160,7 +1247,7 @@ pub fn play(
         args,
         options,
         steam_timeout,
-        shutdown_grace: APPLAUNCH_SHUTDOWN_GRACE,
+        shutdown_grace: SHUTDOWN_GRACE,
         poll: POLL_INTERVAL,
     };
     play_with(layout, bottle, wine, &request, dry_run)
@@ -1174,7 +1261,7 @@ struct PlayRequest<'a> {
     args: &'a [String],
     options: &'a LaunchOptions,
     steam_timeout: Duration,
-    /// [`APPLAUNCH_SHUTDOWN_GRACE`].
+    /// [`SHUTDOWN_GRACE`].
     shutdown_grace: Duration,
     poll: Duration,
 }

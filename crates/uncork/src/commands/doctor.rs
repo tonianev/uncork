@@ -30,7 +30,21 @@ pub(super) fn run(ctx: &Ctx) -> anyhow::Result<ExitCode> {
     let host = HostInfo::probe(ctx.layout.root());
     let components = ctx.components()?;
     let bottles = uncork_core::bottle::list(&ctx.layout)?;
-    let checks = host::evaluate(&host, &components, &bottles);
+    let mut checks = host::evaluate(&host, &components, &bottles);
+    // Each bottle's Retina mode and DPI, from its user.reg, after the
+    // bottle-wine checks.
+    let dpi: Vec<Check> = bottles
+        .iter()
+        .filter_map(|bottle| {
+            let registry = uncork_core::bottle::DisplayRegistry::read(&bottle.path)?;
+            host::bottle_dpi(bottle, &registry)
+        })
+        .collect();
+    let at = checks
+        .iter()
+        .position(|check| check.id == "crossover")
+        .unwrap_or(checks.len());
+    checks.splice(at..at, dpi);
     let failed = checks.iter().filter(|c| c.status == Status::Fail).count();
 
     if ctx.json {

@@ -656,18 +656,46 @@ fn logged(spec: CommandSpec, log: Option<&Path>) -> CommandSpec {
 /// `HKEY_CURRENT_USER\Software\Wine`, where `winecfg` keeps the Windows version.
 const WINE_KEY: &str = r"HKEY_CURRENT_USER\Software\Wine";
 
-/// Registry defaults for a bottle, derived from its config. Under
-/// `HKEY_CURRENT_USER\Software\Wine\Mac Driver` (string values `y`/`n`;
-/// key names from Wine's `winemac.drv/macdrv_main.c`):
+/// `HKEY_CURRENT_USER\Control Panel\Desktop`, where Wine reads the DPI
+/// (`LogPixels`) from.
+const DESKTOP_KEY: &str = r"HKEY_CURRENT_USER\Control Panel\Desktop";
+
+/// `HKEY_CURRENT_USER\Software\Wine\Fonts`, where Wine keeps a copy of the
+/// DPI for its font code.
+const FONTS_KEY: &str = r"HKEY_CURRENT_USER\Software\Wine\Fonts";
+
+/// The DPI (`LogPixels`) of a bottle without Retina mode: Windows' 100 %.
+pub const STANDARD_DPI: u32 = 96;
+
+/// The DPI of a bottle with Retina mode: 200 %. Programs that are not
+/// DPI-aware then see the screen at its "looks like" size in points, as
+/// with CrossOver's High Resolution Mode, which writes the same pair.
+pub const RETINA_DPI: u32 = 192;
+
+/// The DPI that goes with Retina mode on or off: [`RETINA_DPI`] or
+/// [`STANDARD_DPI`]. Wine reads both when a wineserver starts, and the two
+/// must agree: Retina mode off with 192 DPI shows a program that is not
+/// DPI-aware a screen of half the size, so its full-screen window ends up
+/// cropped and offset (seen with Rise of Nations on 2026-10-08).
+#[must_use]
+pub fn dpi_for(retina: bool) -> u32 {
+    if retina { RETINA_DPI } else { STANDARD_DPI }
+}
+
+/// Registry defaults for a bottle, derived from its config.
 ///
-/// - `RetinaMode` = `y` if `performance.retina` else `n`
-/// - `UseConfinementCursorClipping` = `y`, `CursorClippingLocksWindows` = `y`
-///   (keeps the cursor in the window: RTS edge scrolling)
-/// - `AllowVerticalSync` = `y`
-/// - `EnableAppNap` = `n` (App Nap throttles a backgrounded Steam client)
+/// | Key under `HKEY_CURRENT_USER` | Value | Set to |
+/// |---|---|---|
+/// | `Software\Wine\Mac Driver` | `RetinaMode` | `y` if `performance.retina`, else `n` |
+/// | `Software\Wine\Mac Driver` | `UseConfinementCursorClipping`, `CursorClippingLocksWindows` | `y` (keeps the cursor in the window: RTS edge scrolling) |
+/// | `Software\Wine\Mac Driver` | `AllowVerticalSync` | `y` |
+/// | `Software\Wine\Mac Driver` | `EnableAppNap` | `n` (App Nap throttles a backgrounded Steam client) |
+/// | `Control Panel\Desktop` | `LogPixels` (DWORD) | [`dpi_for`] `performance.retina`: 192 or 96 |
+/// | `Software\Wine\Fonts` | `LogPixels` (DWORD) | the same (a copy Wine's font code keeps) |
+/// | `Software\Wine` | `Version` | the [`WindowsVersion::winecfg_name`] |
 ///
-/// and under `HKEY_CURRENT_USER\Software\Wine`: `Version` = the
-/// [`WindowsVersion::winecfg_name`].
+/// Mac driver values are strings (`y`/`n`); key names are from Wine's
+/// `winemac.drv/macdrv_main.c` and `win32u/sysparams.c`.
 #[must_use]
 pub fn default_registry(config: &BottleConfig) -> Vec<crate::registry::RegKey> {
     let flag = |name: &str, on: bool| {
@@ -676,16 +704,26 @@ pub fn default_registry(config: &BottleConfig) -> Vec<crate::registry::RegKey> {
             RegValue::Sz(if on { "y" } else { "n" }.to_owned()),
         )
     };
+    let retina = config.performance.retina;
+    let dpi = || vec![("LogPixels".to_owned(), RegValue::Dword(dpi_for(retina)))];
     vec![
         RegKey {
             path: crate::registry::MAC_DRIVER_KEY.to_owned(),
             values: vec![
-                flag("RetinaMode", config.performance.retina),
+                flag("RetinaMode", retina),
                 flag("UseConfinementCursorClipping", true),
                 flag("CursorClippingLocksWindows", true),
                 flag("AllowVerticalSync", true),
                 flag("EnableAppNap", false),
             ],
+        },
+        RegKey {
+            path: DESKTOP_KEY.to_owned(),
+            values: dpi(),
+        },
+        RegKey {
+            path: FONTS_KEY.to_owned(),
+            values: dpi(),
         },
         RegKey {
             path: WINE_KEY.to_owned(),
@@ -697,8 +735,97 @@ pub fn default_registry(config: &BottleConfig) -> Vec<crate::registry::RegKey> {
     ]
 }
 
-/// Apply [`default_registry`] to an existing bottle (used by `bottle set`
-/// and before a launch when `retina` changes).
+/// Retina mode and DPI as a prefix's `user.reg` has them on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct DisplayRegistry {
+    /// `HKCU\Software\Wine\Mac Driver` `RetinaMode`, read as Wine reads it
+    /// (on when the string starts with `y`, `t` or `1`, any case); `None`
+    /// when it is not set, which Wine takes as off.
+    pub retina_mode: Option<bool>,
+    /// `HKCU\Control Panel\Desktop` `LogPixels`; `None` when it is not set
+    /// (Wine then falls back to the machine's value, normally 96).
+    pub log_pixels: Option<u32>,
+}
+
+impl DisplayRegistry {
+    /// Read the pair from `<prefix>/user.reg`; `None` when the file cannot
+    /// be read.
+    #[must_use]
+    pub fn read(prefix: &Path) -> Option<DisplayRegistry> {
+        let path = prefix.join("user.reg");
+        match std::fs::read(&path) {
+            Ok(bytes) => Some(DisplayRegistry::parse(&String::from_utf8_lossy(&bytes))),
+            Err(err) => {
+                tracing::debug!("cannot read {}: {err}", path.display());
+                None
+            }
+        }
+    }
+
+    /// The pair in the text of a `user.reg` ([`crate::registry::file_value`]).
+    /// A `RetinaMode` stored as a DWORD counts as on when it is not 0.
+    #[must_use]
+    pub fn parse(user_reg: &str) -> DisplayRegistry {
+        use crate::registry::{FileValue, file_value};
+        let retina_mode = match file_value(user_reg, r"Software\Wine\Mac Driver", "RetinaMode") {
+            Some(FileValue::Sz(text)) => Some(text.starts_with(['y', 'Y', 't', 'T', '1'])),
+            Some(FileValue::Dword(value)) => Some(value != 0),
+            Some(FileValue::Other) | None => None,
+        };
+        let log_pixels = match file_value(user_reg, r"Control Panel\Desktop", "LogPixels") {
+            Some(FileValue::Dword(dpi)) => Some(dpi),
+            _ => None,
+        };
+        DisplayRegistry {
+            retina_mode,
+            log_pixels,
+        }
+    }
+
+    /// What the prefix was set up for: Retina when `RetinaMode` is on or
+    /// `LogPixels` is [`RETINA_DPI`] or more (CrossOver's High Resolution
+    /// Mode writes both).
+    #[must_use]
+    pub fn wants_retina(&self) -> bool {
+        self.retina_mode == Some(true) || self.log_pixels.is_some_and(|dpi| dpi >= RETINA_DPI)
+    }
+
+    /// `true` when `LogPixels` is set and is not [`dpi_for`] the Retina
+    /// mode Wine uses (a missing `RetinaMode` counts as off, as in Wine):
+    /// a pair Uncork never writes, which shows programs that are not
+    /// DPI-aware a screen of the wrong size.
+    #[must_use]
+    pub fn disagrees(&self) -> bool {
+        self.log_pixels
+            .is_some_and(|dpi| dpi != dpi_for(self.retina_mode.unwrap_or(false)))
+    }
+
+    /// `true` when a value that is set differs from what
+    /// [`default_registry`] writes for `retina`.
+    #[must_use]
+    pub fn differs_from(&self, retina: bool) -> bool {
+        self.retina_mode.is_some_and(|on| on != retina)
+            || self.log_pixels.is_some_and(|dpi| dpi != dpi_for(retina))
+    }
+
+    /// `RetinaMode y, LogPixels 192`, for messages; unset values are
+    /// `not set`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let retina = match self.retina_mode {
+            Some(true) => "y",
+            Some(false) => "n",
+            None => "not set",
+        };
+        let dpi = self
+            .log_pixels
+            .map_or_else(|| "not set".to_owned(), |dpi| dpi.to_string());
+        format!("RetinaMode {retina}, LogPixels {dpi}")
+    }
+}
+
+/// Apply [`default_registry`] to an existing bottle without the checks of
+/// [`apply_registry_stopped`]; for a bottle no wineserver runs for.
 ///
 /// # Errors
 /// I/O or command errors.
@@ -708,6 +835,38 @@ pub fn apply_registry(
     keys: &[crate::registry::RegKey],
 ) -> crate::Result<()> {
     import_registry(bottle, wine, keys, None)
+}
+
+/// Apply `keys` (normally [`default_registry`]) with the bottle stopped.
+/// Wine reads Retina mode, the DPI and the Windows version when a
+/// wineserver starts: changed while anything of the bottle runs (the Steam
+/// client keeps its wineserver alive), they give windows stale sizes and
+/// offsets, and programs that look up display modes can crash. So:
+///
+/// 1. Ask whether a wineserver runs for the bottle
+///    ([`WineRuntime::server_probe_command`]).
+/// 2. If one does, stop the bottle with [`crate::steam::stop_bottle`]: a
+///    running Steam client is asked to exit and given
+///    [`crate::steam::SHUTDOWN_GRACE`], then `wineserver --kill` ends the
+///    rest and Steam's running marker is reset.
+/// 3. Import `keys` with `regedit /S`.
+/// 4. Wait for the wineserver `regedit` started to exit
+///    ([`WineRuntime::wait_command`]), so it saves the registry and the
+///    next launch starts a fresh one that reads the new values.
+///
+/// Returns `true` when programs were running and were stopped.
+///
+/// # Errors
+/// I/O or command errors.
+pub fn apply_registry_stopped(
+    bottle: &Bottle,
+    wine: &WineRuntime,
+    keys: &[crate::registry::RegKey],
+) -> crate::Result<bool> {
+    let stopped = crate::steam::stop_bottle(bottle, wine, crate::steam::SHUTDOWN_GRACE)?;
+    import_registry(bottle, wine, keys, None)?;
+    crate::process::run(&in_bottle(wine.wait_command(&bottle.path), bottle, wine))?;
+    Ok(stopped)
 }
 
 /// Distinguishes the `.reg` files of concurrent imports within one process.
@@ -797,6 +956,13 @@ pub enum ImportMode {
 /// it is set to 0 ([`crate::steam`] would otherwise take the copy's Steam
 /// for running). A failure to do so is only logged.
 ///
+/// The prefix's Retina mode and DPI are kept: `performance.retina` is set
+/// to [`DisplayRegistry::wants_retina`] of the prefix's `user.reg` (on when
+/// `RetinaMode` is on or `LogPixels` is 192 or more, as CrossOver's High
+/// Resolution Mode leaves them). The registry itself is not touched here;
+/// applying [`default_registry`] afterwards ([`apply_registry_stopped`])
+/// makes the pair consistent.
+///
 /// # Errors
 /// [`crate::Error::NotFound`] when `source` is not a prefix,
 /// [`crate::Error::AlreadyExists`], or I/O / command errors.
@@ -839,6 +1005,9 @@ pub fn import(
         imported_from: Some(source),
         ..new_config(name, wine_version)
     };
+    config.performance.retina = DisplayRegistry::read(&dest)
+        .unwrap_or_default()
+        .wants_retina();
     if let Some(user) = prefix_user(&dest) {
         // Wine names the Windows profile after USER. CrossOver bottles use
         // `crossover`; running as anyone else would start from an empty
@@ -1129,7 +1298,7 @@ mod tests {
     }
 
     #[test]
-    fn default_registry_sets_the_mac_driver_and_windows_version() {
+    fn default_registry_sets_the_mac_driver_dpi_and_windows_version() {
         let keys = default_registry(&config("steam"));
         assert_eq!(
             keys,
@@ -1145,10 +1314,25 @@ mod tests {
                     ],
                 },
                 RegKey {
+                    path: r"HKEY_CURRENT_USER\Control Panel\Desktop".to_owned(),
+                    values: vec![("LogPixels".to_owned(), RegValue::Dword(96))],
+                },
+                RegKey {
+                    path: r"HKEY_CURRENT_USER\Software\Wine\Fonts".to_owned(),
+                    values: vec![("LogPixels".to_owned(), RegValue::Dword(96))],
+                },
+                RegKey {
                     path: r"HKEY_CURRENT_USER\Software\Wine".to_owned(),
                     values: vec![("Version".to_owned(), sz("win10"))],
                 },
             ]
+        );
+        let text = crate::registry::render(&keys);
+        assert!(
+            text.contains(
+                "[HKEY_CURRENT_USER\\Control Panel\\Desktop]\n\"LogPixels\"=dword:00000060\n"
+            ),
+            "{text}"
         );
     }
 
@@ -1159,7 +1343,108 @@ mod tests {
         config.windows_version = WindowsVersion::Win7;
         let keys = default_registry(&config);
         assert_eq!(keys[0].values[0], ("RetinaMode".to_owned(), sz("y")));
-        assert_eq!(keys[1].values[0], ("Version".to_owned(), sz("win7")));
+        for dpi in &keys[1..3] {
+            assert_eq!(
+                dpi.values,
+                [("LogPixels".to_owned(), RegValue::Dword(192))],
+                "{}",
+                dpi.path
+            );
+        }
+        assert_eq!(keys[3].values[0], ("Version".to_owned(), sz("win7")));
+        assert_eq!(dpi_for(true), RETINA_DPI);
+        assert_eq!(dpi_for(false), STANDARD_DPI);
+    }
+
+    // ----- Retina mode and DPI on disk -----
+
+    fn user_reg(retina: Option<&str>, dpi: Option<u32>) -> String {
+        let mut text = String::from("WINE REGISTRY Version 2\n\n[Control Panel\\\\Desktop] 1\n");
+        if let Some(dpi) = dpi {
+            text.push_str(&format!("\"LogPixels\"=dword:{dpi:08x}\n"));
+        }
+        text.push_str("\n[Software\\\\Wine\\\\Mac Driver] 1\n");
+        if let Some(retina) = retina {
+            text.push_str(&format!("\"RetinaMode\"=\"{retina}\"\n"));
+        }
+        text
+    }
+
+    #[test]
+    fn display_registry_reads_the_pair() {
+        let pair = |retina, dpi| DisplayRegistry::parse(&user_reg(retina, dpi));
+        assert_eq!(
+            pair(Some("y"), Some(192)),
+            DisplayRegistry {
+                retina_mode: Some(true),
+                log_pixels: Some(192)
+            }
+        );
+        assert_eq!(pair(None, None), DisplayRegistry::default());
+        for on in ["y", "Y", "yes", "t", "True", "1"] {
+            assert_eq!(pair(Some(on), None).retina_mode, Some(true), "{on}");
+        }
+        for off in ["n", "N", "no", "false", "0", ""] {
+            assert_eq!(pair(Some(off), None).retina_mode, Some(false), "{off}");
+        }
+        let dword = DisplayRegistry::parse(
+            "[Software\\\\Wine\\\\Mac Driver] 1\n\"RetinaMode\"=dword:00000001\n",
+        );
+        assert_eq!(dword.retina_mode, Some(true));
+    }
+
+    #[test]
+    fn display_registry_judges_the_pair() {
+        let pair = |retina_mode, log_pixels| DisplayRegistry {
+            retina_mode,
+            log_pixels,
+        };
+        // CrossOver's High Resolution Mode, and Uncork's pairs.
+        for (registry, retina) in [
+            (pair(Some(true), Some(192)), true),
+            (pair(Some(false), Some(96)), false),
+            (pair(None, Some(96)), false),
+            (pair(None, None), false),
+            (pair(Some(true), None), true),
+        ] {
+            assert!(!registry.disagrees(), "{registry:?}");
+            assert_eq!(registry.wants_retina(), retina, "{registry:?}");
+            assert!(!registry.differs_from(retina), "{registry:?}");
+        }
+        // Seen on 2026-10-08: Uncork's RetinaMode n next to CrossOver's 192.
+        let mixed = pair(Some(false), Some(192));
+        assert!(mixed.disagrees());
+        assert!(
+            mixed.wants_retina(),
+            "192 DPI means the prefix was set up for Retina"
+        );
+        assert!(mixed.differs_from(false) && mixed.differs_from(true));
+        assert!(
+            pair(None, Some(192)).disagrees(),
+            "Wine takes a missing RetinaMode as off"
+        );
+        assert!(pair(Some(true), Some(96)).disagrees());
+        assert!(pair(Some(false), Some(144)).disagrees());
+        assert!(pair(Some(true), Some(192)).differs_from(false));
+        assert_eq!(mixed.describe(), "RetinaMode n, LogPixels 192");
+        assert_eq!(
+            pair(None, None).describe(),
+            "RetinaMode not set, LogPixels not set"
+        );
+    }
+
+    #[test]
+    fn display_registry_of_a_prefix_without_user_reg_is_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(DisplayRegistry::read(dir.path()), None);
+        write(&dir.path().join("user.reg"), &user_reg(Some("n"), Some(96)));
+        assert_eq!(
+            DisplayRegistry::read(dir.path()),
+            Some(DisplayRegistry {
+                retina_mode: Some(false),
+                log_pixels: Some(96)
+            })
+        );
     }
 
     #[test]
@@ -1817,6 +2102,30 @@ printf '%s\n' "wineserver $* | WINEPREFIX=$WINEPREFIX" >> '@CALLS@'
             running,
             "the original is untouched"
         );
+    }
+
+    #[test]
+    fn import_keeps_the_prefixs_retina_mode() {
+        let (dir, layout) = home();
+        for (name, user_reg, retina) in [
+            // CrossOver with High Resolution Mode on.
+            ("hires", user_reg(Some("y"), Some(192)), true),
+            // Uncork's RetinaMode n left next to CrossOver's 192 DPI.
+            ("mixed", user_reg(Some("n"), Some(192)), true),
+            ("lores", user_reg(Some("n"), Some(96)), false),
+            ("plain", user_reg(None, None), false),
+        ] {
+            let source = dir.path().join(format!("source-{name}"));
+            fake_prefix(&source);
+            write(&source.join("user.reg"), &user_reg);
+            let bottle = import(&layout, &source, name, "11.0", ImportMode::Clone).unwrap();
+            assert_eq!(bottle.config.performance.retina, retina, "{name}");
+            assert_eq!(
+                std::fs::read_to_string(bottle.path.join("user.reg")).unwrap(),
+                user_reg,
+                "{name}: the registry itself is left for apply_registry_stopped"
+            );
+        }
     }
 
     #[test]

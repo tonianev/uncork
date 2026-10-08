@@ -249,6 +249,11 @@ pub enum BottleCommand {
         name: String,
     },
     /// Change a bottle setting, e.g. `graphics.backend=dxmt`, `performance.retina=true`, `env.DXMT_LOG_LEVEL=info`.
+    ///
+    /// `performance.retina` (with the DPI that goes with it) and `windows_version` are also written
+    /// into the prefix's registry, which Wine reads when the bottle starts, so whatever runs in the
+    /// bottle (Steam included) is stopped first. Naming `performance.retina` also repairs a registry
+    /// whose Retina mode and DPI disagree (`uncork doctor` reports it).
     Set {
         /// Bottle name.
         name: String,

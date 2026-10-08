@@ -37,6 +37,16 @@ impl Home {
         self.dir.path()
     }
 
+    /// The marker file of the fake wineserver: present while one "runs".
+    pub fn server_file(&self) -> PathBuf {
+        self.path().join("wineserver-running")
+    }
+
+    /// Make the fake Wine act as if a wineserver ran for every prefix.
+    pub fn start_fake_wineserver(&self) {
+        fs::write(self.server_file(), "").unwrap();
+    }
+
     /// The data root, `UNCORK_HOME`.
     pub fn root(&self) -> PathBuf {
         self.dir.path().join("uncork")
@@ -125,7 +135,10 @@ impl Home {
     /// Install a Wine component whose `bin/wine` and `bin/wineserver` are
     /// shell scripts appending one line per call to [`Home::calls`].
     /// `wine wineboot` lays out a minimal prefix (`system.reg`,
-    /// `drive_c/users/$USER`); `wine reg` fails like a missing key.
+    /// `drive_c/users/$USER`); `wine reg` fails like a missing key. Every
+    /// `wine` call but `wine --version` "starts a wineserver" (creates
+    /// [`Home::server_file`]); `wineserver -k0` reports it, `--wait` and
+    /// `--kill` end it.
     pub fn install_fake_wine(&self) -> PathBuf {
         let dir = self.install_component(
             "wine",
@@ -138,9 +151,13 @@ impl Home {
         }
         let calls = self.calls_file();
         let calls = calls.to_str().unwrap();
+        let server = self.server_file();
+        let server = server.to_str().unwrap();
         let wine = format!(
             r#"#!/bin/sh
 printf 'wine %s | WINEPREFIX=%s USER=%s\n' "$*" "$WINEPREFIX" "$USER" >> '{calls}'
+# Like Wine, everything but `wine --version` starts a wineserver.
+[ "$1" = --version ] || : > '{server}'
 case "$1" in
     wineboot)
         mkdir -p "$WINEPREFIX/drive_c/windows/system32" "$WINEPREFIX/drive_c/windows/syswow64" \
@@ -155,7 +172,14 @@ exit 0
 "#
         );
         let wineserver = format!(
-            "#!/bin/sh\nprintf 'wineserver %s | WINEPREFIX=%s\\n' \"$*\" \"$WINEPREFIX\" >> '{calls}'\nexit 0\n"
+            r#"#!/bin/sh
+printf 'wineserver %s | WINEPREFIX=%s\n' "$*" "$WINEPREFIX" >> '{calls}'
+case "$1" in
+    -k0) [ -f '{server}' ] && exit 0; exit 1 ;;
+    --wait|--kill) rm -f '{server}' ;;
+esac
+exit 0
+"#
         );
         write_script(&dir.join("bin/wine"), &wine);
         write_script(&dir.join("bin/wineserver"), &wineserver);

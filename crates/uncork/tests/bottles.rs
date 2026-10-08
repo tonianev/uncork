@@ -228,6 +228,129 @@ fn bottle_set_without_the_bottles_wine_changes_nothing_and_can_be_repeated() {
         .success();
 }
 
+/// A `user.reg` with Retina mode `retina` and `dpi` DPI, as CrossOver and
+/// Wine write it.
+fn user_reg(retina: &str, dpi: u32) -> String {
+    format!(
+        "WINE REGISTRY Version 2\n;; All keys relative to \\\\User\\\\S-1-5-21-0-0-0-1000\n\n#arch=win64\n\n\
+         [Control Panel\\\\Desktop] 1759800000\n\"LogPixels\"=dword:{dpi:08x}\n\n\
+         [Software\\\\Wine\\\\Mac Driver] 1759800000\n\"RetinaMode\"=\"{retina}\"\n"
+    )
+}
+
+#[test]
+fn bottle_set_retina_stops_a_running_bottle_first() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_bottle("b", FAKE_WINE);
+    home.start_fake_wineserver();
+
+    home.uncork()
+        .args(["bottle", "set", "b", "performance.retina=on"])
+        .assert()
+        .success()
+        .stdout(contains("b: performance.retina = true"))
+        .stdout(contains(
+            "Stopped the Windows programs that were running in bottle b (Steam included)",
+        ))
+        .stdout(contains(
+            "Updated the bottle's registry (Retina mode on, 192 DPI, Windows version win10).",
+        ));
+    let calls = home.calls();
+    let at = |prefix: &str| {
+        calls
+            .iter()
+            .position(|call| call.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no {prefix}: {calls:#?}"))
+    };
+    assert!(at("wineserver -k0") < at("wineserver --kill"), "{calls:#?}");
+    assert!(
+        at("wineserver --kill") < at("wine regedit /S"),
+        "{calls:#?}"
+    );
+    assert!(
+        calls.last().unwrap().starts_with("wineserver --wait"),
+        "the next launch starts a fresh wineserver: {calls:#?}"
+    );
+
+    // With nothing running, nothing is stopped.
+    home.uncork()
+        .args(["bottle", "set", "b", "windows_version=win7"])
+        .assert()
+        .success()
+        .stdout(contains("Stopped").not())
+        .stdout(contains("Windows version win7"));
+}
+
+#[test]
+fn bottle_set_repairs_a_retina_and_dpi_pair_that_disagrees() {
+    let home = Home::new();
+    home.install_fake_wine();
+    let dir = home.write_bottle("cx", FAKE_WINE);
+    // Uncork's RetinaMode n next to the 192 DPI CrossOver left.
+    fs::write(dir.join("user.reg"), user_reg("n", 192)).unwrap();
+
+    let doctor = home.json(&["doctor"]);
+    let check = doctor["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "bottle-dpi")
+        .unwrap_or_else(|| panic!("{doctor:#}"));
+    assert_eq!(check["status"], "warn");
+    assert!(
+        check["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Retina mode and DPI disagree (RetinaMode n, LogPixels 192)"),
+        "{check}"
+    );
+    assert_eq!(
+        check["fix"],
+        "uncork bottle set cx performance.retina=false"
+    );
+
+    // The fix rewrites the registry although uncork.toml stays the same.
+    let regedits = |home: &Home| {
+        home.calls()
+            .iter()
+            .filter(|call| call.starts_with("wine regedit"))
+            .count()
+    };
+    home.uncork()
+        .args(["bottle", "set", "cx", "performance.retina=false"])
+        .assert()
+        .success()
+        .stdout(contains("Nothing changed").not())
+        .stdout(contains("Retina mode off, 96 DPI"));
+    assert_eq!(regedits(&home), 1);
+
+    // Other settings leave the registry alone.
+    home.uncork()
+        .args(["bottle", "set", "cx", "performance.hud=on"])
+        .assert()
+        .success()
+        .stdout(contains("Updated the bottle's registry").not());
+    assert_eq!(regedits(&home), 1);
+
+    // A consistent pair needs no repair.
+    fs::write(dir.join("user.reg"), user_reg("n", 96)).unwrap();
+    home.uncork()
+        .args(["bottle", "set", "cx", "performance.retina=false"])
+        .assert()
+        .success()
+        .stdout("Nothing changed in bottle cx.\n");
+    let doctor = home.json(&["doctor"]);
+    assert!(
+        !doctor["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["id"] == "bottle-dpi"),
+        "{doctor:#}"
+    );
+}
+
 #[test]
 fn bottle_set_says_to_restart_after_an_msync_change() {
     let home = Home::new();
@@ -292,7 +415,10 @@ fn bottle_import_of_a_crossover_prefix_keeps_its_user() {
         .success()
         .stdout(contains("as bottle my-steam"))
         .stdout(contains("cloned; the original is untouched"))
-        .stdout(contains("USER=crossover and LOGNAME=crossover"));
+        .stdout(contains("USER=crossover and LOGNAME=crossover"))
+        .stdout(contains(
+            "The prefix set neither Retina mode nor its DPI, so the bottle has Uncork's default: Retina mode off with 96 DPI",
+        ));
     let imported = home.bottle("my-steam");
     assert!(
         imported
@@ -330,6 +456,40 @@ fn bottle_import_of_a_crossover_prefix_keeps_its_user() {
         .stdout(contains("(moved)"));
     assert!(!source.exists());
     assert!(home.bottle("moved").join("system.reg").is_file());
+}
+
+#[test]
+fn bottle_import_keeps_crossovers_high_resolution_mode() {
+    let home = Home::new();
+    home.install_fake_wine();
+    let source = home.path().join("Steam");
+    fs::create_dir_all(source.join("drive_c/users/crossover")).unwrap();
+    fs::write(source.join("system.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    fs::write(source.join("user.reg"), user_reg("y", 192)).unwrap();
+
+    home.uncork()
+        .args(["bottle", "import", source.to_str().unwrap(), "--name", "cx"])
+        .assert()
+        .success()
+        .stdout(contains(
+            "The prefix had RetinaMode y, LogPixels 192, so Retina mode stays on (performance.retina = true) with 192 DPI to match",
+        ))
+        .stdout(contains("uncork bottle set cx performance.retina=false"));
+    let info = home.json(&["bottle", "info", "cx"]);
+    assert_eq!(info["config"]["performance"]["retina"], true);
+    let calls = home.calls();
+    let regedit = calls
+        .iter()
+        .position(|call| call.starts_with("wine regedit /S"))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    assert!(
+        calls[regedit].contains(&home.bottle("cx").display().to_string()),
+        "{calls:#?}"
+    );
+    assert!(
+        calls[regedit + 1].starts_with("wineserver --wait"),
+        "{calls:#?}"
+    );
 }
 
 #[test]
