@@ -610,6 +610,28 @@ fn bottle_import_keeps_crossovers_high_resolution_mode() {
 }
 
 #[test]
+fn bottle_import_turns_retina_mode_on_to_match_a_high_resolution_dpi() {
+    let home = Home::new();
+    home.install_fake_wine();
+    let source = home.path().join("Steam");
+    fs::create_dir_all(source.join("drive_c/users/crossover")).unwrap();
+    fs::write(source.join("system.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    // Uncork's RetinaMode n next to the 192 DPI CrossOver left.
+    fs::write(source.join("user.reg"), user_reg("n", 192)).unwrap();
+
+    home.uncork()
+        .args(["bottle", "import", source.to_str().unwrap(), "--name", "cx"])
+        .assert()
+        .success()
+        .stdout(contains(
+            "The prefix had RetinaMode n, LogPixels 192: Retina mode was off, but its DPI is what CrossOver's High Resolution Mode sets, so Retina mode is now on (performance.retina = true) with 192 DPI to match",
+        ))
+        .stdout(contains("stays").not());
+    let info = home.json(&["bottle", "info", "cx"]);
+    assert_eq!(info["config"]["performance"]["retina"], true);
+}
+
+#[test]
 fn bottle_import_needs_a_prefix_and_a_wine() {
     let home = Home::new();
     let source = home.path().join("prefix");

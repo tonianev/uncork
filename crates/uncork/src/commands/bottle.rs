@@ -746,6 +746,13 @@ fn apply_imported_display(imported: &Bottle, wine: &WineRuntime) {
         Ok(_) if found == bottle::DisplayRegistry::default() => println!(
             "The prefix set neither Retina mode nor its DPI, so the bottle has Uncork's default: Retina mode off with {dpi} DPI; change it with `uncork bottle set {name} performance.retina=true`."
         ),
+        // Wine ran the prefix with Retina mode off (RetinaMode n or unset),
+        // but its DPI is High Resolution Mode's: turned on to match.
+        Ok(_) if found.effective_retina() != retina => println!(
+            "The prefix had {}: Retina mode was off, but its DPI is what CrossOver's High Resolution Mode sets, so Retina mode is now {on_off} (performance.retina = {retina}) with {dpi} DPI to match; change it with `uncork bottle set {name} performance.retina={}`.",
+            found.describe(),
+            !retina
+        ),
         Ok(_) => println!(
             "The prefix had {}, so Retina mode stays {on_off} (performance.retina = {retina}) with {dpi} DPI to match; change it with `uncork bottle set {name} performance.retina={}`.",
             found.describe(),
