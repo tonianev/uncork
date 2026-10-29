@@ -102,7 +102,10 @@ struct InspectView<'a> {
 
 /// Scan the executable and the DLLs beside it, and recommend a backend.
 pub(super) fn run(ctx: &Ctx, args: &InspectArgs) -> anyhow::Result<ExitCode> {
+    // Through `uncork_core::Error` so the failure is classified
+    // `invalid-executable` (exit code 4), as a launch's scan would be.
     let scan = uncork_pe::scan_game(&args.exe)
+        .map_err(uncork_core::Error::from)
         .with_context(|| format!("cannot inspect {}", args.exe.display()))?;
     let components = ctx.components()?;
     let (available, unavailable) = availability(&components);

@@ -22,7 +22,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 )]
 pub struct Cli {
     /// Print machine-readable JSON instead of text (doctor, list, info, show,
-    /// inspect, games and --dry-run output).
+    /// inspect, games, --dry-run output and errors).
     #[arg(long, global = true)]
     pub json: bool,
 

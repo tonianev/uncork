@@ -716,9 +716,9 @@ fn bottle_kill_reports_an_uninstalled_wine() {
 fn steam_games_lists_installed_apps_with_their_profiles() {
     let home = Home::new();
     home.write_bottle("steam", FAKE_WINE);
-    let stderr = home.stderr_of_failure(&["steam", "games"]);
+    let stderr = home.stderr_of_failure_with(3, &["steam", "games"]);
     assert!(
-        stderr.contains("Steam is not installed in bottle steam; run: uncork steam install"),
+        stderr.contains("Steam in bottle \"steam\" not found; run: uncork steam install"),
         "{stderr}"
     );
 

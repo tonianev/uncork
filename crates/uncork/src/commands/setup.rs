@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use anyhow::{Context as _, bail};
+use anyhow::Context as _;
 use uncork_core::bottle::{self, Bottle, CreateOptions};
 use uncork_core::catalog::{Catalog, CatalogEntry};
 use uncork_core::component::ComponentKind;
@@ -94,12 +94,14 @@ pub(super) fn run(ctx: &Ctx, args: &SetupArgs) -> anyhow::Result<ExitCode> {
 }
 
 /// Fail early, with the fix, when Rosetta 2 is missing; Wine is x86-64.
+/// A missing Rosetta is a [`uncork_core::Error::Host`] (exit code 7).
 fn check_rosetta(host: &HostInfo) -> anyhow::Result<()> {
     match host.rosetta {
         Rosetta::Installed | Rosetta::NotNeeded => Ok(()),
-        Rosetta::Missing => bail!(
-            "Rosetta 2 is not installed, and Wine cannot run without it\n      fix: softwareupdate --install-rosetta --agree-to-license"
-        ),
+        Rosetta::Missing => Err(uncork_core::Error::Host(
+            "Rosetta 2 is not installed, and Wine cannot run without it\n      fix: softwareupdate --install-rosetta --agree-to-license".to_owned(),
+        )
+        .into()),
         Rosetta::Unknown => {
             eprintln!(
                 "warning: cannot tell whether Rosetta 2 is installed; if Wine fails to start, run: softwareupdate --install-rosetta --agree-to-license"

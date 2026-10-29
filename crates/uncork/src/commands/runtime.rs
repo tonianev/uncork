@@ -215,14 +215,18 @@ fn entries_for<'a>(
                     .iter()
                     .map(|entry| entry.version.as_str())
                     .collect();
-                anyhow!(
-                    "the catalog has no {kind} {version}; available: {}",
-                    if known.is_empty() {
-                        "none".to_owned()
-                    } else {
-                        known.join(", ")
-                    }
-                )
+                uncork_core::Error::NotFound {
+                    what: "catalog entry",
+                    name: format!("{kind} {version}"),
+                    hint: format!(
+                        "; available: {}",
+                        if known.is_empty() {
+                            "none".to_owned()
+                        } else {
+                            known.join(", ")
+                        }
+                    ),
+                }
             })?;
             Ok(vec![entry])
         }

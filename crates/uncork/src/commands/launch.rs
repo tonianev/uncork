@@ -87,11 +87,10 @@ pub(super) fn play(ctx: &Ctx, args: &PlayArgs) -> anyhow::Result<ExitCode> {
                 profile.exe.path
             )
         })?,
-        None => parse_appid(&args.game).ok_or_else(|| {
-            anyhow!(
-                "no game profile matches {:?}; `uncork profile list` shows the known games, and `uncork play <Steam app id>` plays any installed Steam game (`uncork steam games` lists them)",
-                args.game
-            )
+        None => parse_appid(&args.game).ok_or_else(|| uncork_core::Error::NotFound {
+            what: "game profile",
+            name: args.game.clone(),
+            hint: "; `uncork profile list` shows the known games, and `uncork play <Steam app id>` plays any installed Steam game (`uncork steam games` lists them)".to_owned(),
         })?,
     };
     play_steam_game(ctx, profile, appid, &args.launch, &options, &args.args)
@@ -412,7 +411,12 @@ fn resolve_exe(bottle: &Bottle, exe: &str) -> anyhow::Result<PathBuf> {
         std::path::absolute(exe).with_context(|| format!("cannot resolve {exe}"))?
     };
     if !path.is_file() {
-        bail!("{} does not exist", path.display());
+        return Err(uncork_core::Error::NotFound {
+            what: "executable",
+            name: path.display().to_string(),
+            hint: String::new(),
+        }
+        .into());
     }
     Ok(path)
 }

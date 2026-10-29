@@ -77,15 +77,19 @@ impl Ctx {
         }
     }
 
-    /// Open `requested`, or the default bottle.
+    /// Open `requested`, or the default bottle; a missing default bottle is
+    /// a `NotFound` saying how to make it (a fresh install has none).
     pub fn open_bottle(&self, requested: Option<&str>) -> anyhow::Result<Bottle> {
         let name = self.bottle_name(requested)?;
         let bottle = Bottle::open_named(&self.layout, &name).map_err(|err| match err {
-            // The default bottle is missing on a fresh install: say how to make it.
-            uncork_core::Error::NotFound { .. } if requested.is_none() => anyhow::anyhow!(
-                "the default bottle {name:?} does not exist yet; run `uncork setup`, or pass --bottle <name> (`uncork bottle list` shows your bottles)"
-            ),
-            other => other.into(),
+            uncork_core::Error::NotFound { .. } if requested.is_none() => {
+                uncork_core::Error::NotFound {
+                    what: "default bottle",
+                    name: name.clone(),
+                    hint: "; run `uncork setup` to create it, or pass --bottle <name> (`uncork bottle list` shows your bottles)".to_owned(),
+                }
+            }
+            other => other,
         })?;
         Ok(bottle)
     }

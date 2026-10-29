@@ -108,18 +108,51 @@ impl Home {
         String::from_utf8(output.stdout).unwrap()
     }
 
-    /// Run `uncork <args>`, expect exit code 1, and return its stderr.
+    /// Run `uncork <args>`, expect an error exit (1, or a classified code
+    /// 3 to 8; never 0 or clap's 2), and return its stderr.
+    /// [`Home::stderr_of_failure_with`] pins the code.
     pub fn stderr_of_failure(&self, args: &[&str]) -> String {
         let output = self.uncork().args(args).output().unwrap();
-        assert_eq!(
-            output.status.code(),
-            Some(1),
+        assert!(
+            matches!(output.status.code(), Some(1 | 3..=8)),
             "uncork {args:?}: {}\nstdout: {}\nstderr: {}",
             output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stderr).unwrap()
+    }
+
+    /// Run `uncork <args>`, expect exit code `code`, and return its stderr.
+    pub fn stderr_of_failure_with(&self, code: i32, args: &[&str]) -> String {
+        let output = self.uncork().args(args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "uncork {args:?}: {}\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stderr).unwrap()
+    }
+
+    /// Run `uncork --json <args>`, expect exit code `code`, and parse the
+    /// one value on its stdout: the `{"error": {...}}` object.
+    pub fn json_failure(&self, code: i32, args: &[&str]) -> serde_json::Value {
+        let mut all = vec!["--json"];
+        all.extend_from_slice(args);
+        let output = self.uncork().args(&all).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "uncork {all:?}: {}\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        serde_json::from_str(&text).unwrap_or_else(|err| panic!("{err}: {text}"))
     }
 
     /// Run `uncork --json <args>` and parse its output.

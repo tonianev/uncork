@@ -85,7 +85,12 @@ fn show(ctx: &Ctx, game: &str) -> anyhow::Result<ExitCode> {
             super::launch::profile_ids(&candidates)
         ),
         Lookup::NotFound => {
-            bail!("no game profile matches {game:?}; `uncork profile list` shows them all")
+            return Err(uncork_core::Error::NotFound {
+                what: "game profile",
+                name: game.to_owned(),
+                hint: "; `uncork profile list` shows them all".to_owned(),
+            }
+            .into());
         }
     };
     if ctx.json {

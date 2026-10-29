@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Child, ExitCode};
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use serde::Serialize;
 use uncork_core::bottle::Bottle;
 use uncork_core::display::Display;
@@ -99,11 +99,18 @@ fn client_spec(
     Ok(spec)
 }
 
+/// Steam is not in `bottle`: a `NotFound` saying how to install it, the
+/// same error `uncork_core::steam` gives a launch.
 fn steam_missing(bottle: &Bottle) -> anyhow::Error {
-    anyhow!(
-        "Steam is not installed in bottle {name}; run: uncork steam install --bottle {name}",
-        name = bottle.config.name
-    )
+    uncork_core::Error::NotFound {
+        what: "Steam in bottle",
+        name: bottle.config.name.clone(),
+        hint: format!(
+            "; run: uncork steam install --bottle {}",
+            bottle.config.name
+        ),
+    }
+    .into()
 }
 
 /// Start the Steam client with its window visible (not `-silent`), after
@@ -236,6 +243,7 @@ fn games(ctx: &Ctx, bottle: Option<&str>) -> anyhow::Result<ExitCode> {
     let steam = SteamInstall::find(bottle.prefix()).ok_or_else(|| steam_missing(&bottle))?;
     let (apps, unreadable) = steam
         .installed_apps()
+        .map_err(uncork_core::Error::from)
         .context("cannot read Steam's library folders")?;
     for err in &unreadable {
         eprintln!("warning: {err}");

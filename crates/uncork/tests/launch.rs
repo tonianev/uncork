@@ -62,11 +62,12 @@ fn install_fake_dxmt(home: &Home) {
 fn run_checks_the_executable_before_planning() {
     let home = Home::new();
     home.write_bottle("b", FAKE_WINE);
-    let stderr = home.stderr_of_failure(&["run", "-b", "b", "missing.exe", "--dry-run"]);
-    assert!(stderr.contains("missing.exe does not exist"), "{stderr}");
-    let stderr = home.stderr_of_failure(&["run", "-b", "b", r"C:\Games\none.exe", "--dry-run"]);
+    let stderr = home.stderr_of_failure_with(3, &["run", "-b", "b", "missing.exe", "--dry-run"]);
+    assert!(stderr.contains("missing.exe\" not found"), "{stderr}");
+    let stderr =
+        home.stderr_of_failure_with(3, &["run", "-b", "b", r"C:\Games\none.exe", "--dry-run"]);
     assert!(
-        stderr.contains("drive_c/Games/none.exe does not exist"),
+        stderr.contains("drive_c/Games/none.exe\" not found"),
         "{stderr}"
     );
     let stderr = home.stderr_of_failure(&["run", "-b", "b", r"C:\..\x.exe", "--dry-run"]);
@@ -529,9 +530,9 @@ fn steam_start_needs_steam() {
     let home = Home::new();
     home.install_fake_wine();
     home.write_bottle("b", FAKE_WINE);
-    let stderr = home.stderr_of_failure(&["steam", "start", "-b", "b"]);
+    let stderr = home.stderr_of_failure_with(3, &["steam", "start", "-b", "b"]);
     assert!(
-        stderr.contains("Steam is not installed in bottle b; run: uncork steam install --bottle b"),
+        stderr.contains("Steam in bottle \"b\" not found; run: uncork steam install --bottle b"),
         "{stderr}"
     );
     assert!(home.calls().is_empty(), "nothing ran");

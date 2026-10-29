@@ -196,7 +196,7 @@ Uncork differs from these in three ways: the core is a permissively licensed (MI
 
 | Document | Contents |
 |---|---|
-| [docs/CLI.md](docs/CLI.md) | Every command and flag, from the binary's own help |
+| [docs/CLI.md](docs/CLI.md) | Every command and flag, from the binary's own help; exit codes and the `--json` error object |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Crates, data layout, components, bottles, backend decision matrix, launch planning, Steam flow, doctor, testing |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Every performance knob, its default and the evidence; measured numbers; how to benchmark |
 | [docs/STEAM.md](docs/STEAM.md) | Steam in a bottle: install, first run, graphics, flags, launch modes, stopping, known issues |

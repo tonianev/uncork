@@ -192,9 +192,10 @@ fn runtime_install_rejects_bad_requests_before_downloading() {
     );
     let stderr = home.stderr_of_failure(&["runtime", "install", "d3dmetal", "-y"]);
     assert!(stderr.contains("uncork runtime import-gptk"), "{stderr}");
-    let stderr = home.stderr_of_failure(&["runtime", "install", "dxmt", "--version", "9.9", "-y"]);
+    let stderr =
+        home.stderr_of_failure_with(3, &["runtime", "install", "dxmt", "--version", "9.9", "-y"]);
     assert!(
-        stderr.contains("the catalog has no dxmt 9.9; available: 0.80"),
+        stderr.contains("catalog entry \"dxmt 9.9\" not found; available: 0.80"),
         "{stderr}"
     );
     let stderr = home.stderr_of_failure(&["runtime", "install", "--version", "0.80", "-y"]);
@@ -223,7 +224,7 @@ fn runtime_remove_deletes_a_component() {
         .success()
         .stdout("Removed dxvk 1.10.3-20230507.\n");
     assert!(!dir.exists());
-    let stderr = home.stderr_of_failure(&["runtime", "remove", "dxvk", "1.10.3-20230507"]);
+    let stderr = home.stderr_of_failure_with(3, &["runtime", "remove", "dxvk", "1.10.3-20230507"]);
     assert!(stderr.contains("not found"), "{stderr}");
 }
 
@@ -299,9 +300,9 @@ fn profile_show_as_text_and_unknown_profiles() {
         text.contains("dxmt, then d3dmetal, then dxvk, then wined3d"),
         "{text}"
     );
-    let stderr = home.stderr_of_failure(&["profile", "show", "half-life"]);
+    let stderr = home.stderr_of_failure_with(3, &["profile", "show", "half-life"]);
     assert!(
-        stderr.contains("no game profile matches \"half-life\""),
+        stderr.contains("game profile \"half-life\" not found; `uncork profile list`"),
         "{stderr}"
     );
 }
@@ -444,7 +445,7 @@ fn inspect_explains_unreadable_files() {
     let home = Home::new();
     let not_pe = home.path().join("readme.exe");
     std::fs::write(&not_pe, "hello").unwrap();
-    let stderr = home.stderr_of_failure(&["inspect", not_pe.to_str().unwrap()]);
+    let stderr = home.stderr_of_failure_with(4, &["inspect", not_pe.to_str().unwrap()]);
     assert!(stderr.starts_with("error: cannot inspect "), "{stderr}");
     assert!(stderr.contains("not a PE image"), "{stderr}");
 }
@@ -469,29 +470,32 @@ fn bad_env_values_are_rejected() {
 #[test]
 fn play_needs_a_known_game_and_a_bottle() {
     let home = Home::new();
-    let stderr = home.stderr_of_failure(&["play", "half-life"]);
+    let stderr = home.stderr_of_failure_with(3, &["play", "half-life"]);
     assert!(
-        stderr.contains("no game profile matches \"half-life\""),
+        stderr.contains("game profile \"half-life\" not found; `uncork profile list`"),
         "{stderr}"
     );
-    let stderr = home.stderr_of_failure(&["play", "rise", "--dry-run"]);
+    let stderr = home.stderr_of_failure_with(3, &["play", "rise", "--dry-run"]);
     assert!(
-        stderr.contains("the default bottle \"steam\" does not exist yet; run `uncork setup`"),
+        stderr.contains("default bottle \"steam\" not found; run `uncork setup`"),
         "{stderr}"
     );
-    let stderr = home.stderr_of_failure(&["play", "12345", "--bottle", "nope"]);
+    let stderr = home.stderr_of_failure_with(3, &["play", "12345", "--bottle", "nope"]);
     assert!(stderr.contains("bottle \"nope\" not found"), "{stderr}");
 }
 
 #[test]
 fn setup_asks_before_downloading() {
     let home = Home::new();
-    let stderr = home.stderr_of_failure(&["setup"]);
-    // Either Rosetta is missing on this host (setup stops first), or the
-    // download needs confirmation; never a download.
+    let output = home.uncork().arg("setup").output().unwrap();
+    let code = output.status.code();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    // Either Rosetta is missing on this host (setup stops first, a `host`
+    // error), or the download needs confirmation; never a download.
     assert!(
-        stderr.contains("--yes") || stderr.contains("Rosetta 2 is not installed"),
-        "{stderr}"
+        (code == Some(1) && stderr.contains("--yes"))
+            || (code == Some(7) && stderr.contains("Rosetta 2 is not installed")),
+        "{code:?}: {stderr}"
     );
     assert!(!home.root().join("cache").exists());
     assert!(!home.root().join("bottles").exists());
@@ -500,7 +504,7 @@ fn setup_asks_before_downloading() {
 #[test]
 fn setup_rejects_invalid_bottle_names() {
     let home = Home::new();
-    let stderr = home.stderr_of_failure(&["setup", "--bottle", "../x"]);
+    let stderr = home.stderr_of_failure_with(4, &["setup", "--bottle", "../x"]);
     assert!(stderr.contains("invalid bottle name"), "{stderr}");
 }
 
@@ -533,7 +537,75 @@ fn errors_print_their_causes() {
     let home = Home::new();
     std::fs::create_dir_all(home.root()).unwrap();
     std::fs::write(home.root().join("config.toml"), "schema = 1\ncolour = 2\n").unwrap();
-    let stderr = home.stderr_of_failure(&["bottle", "list"]);
+    let stderr = home.stderr_of_failure_with(4, &["bottle", "list"]);
     assert!(stderr.starts_with("error: invalid config "), "{stderr}");
     assert!(stderr.contains("colour"), "{stderr}");
+}
+
+#[test]
+fn json_errors_are_one_object_with_a_kind_and_an_exit_code() {
+    let home = Home::new();
+    let error = home.json_failure(3, &["profile", "show", "does-not-exist"]);
+    assert_eq!(error["error"]["kind"], "not-found");
+    assert_eq!(error["error"]["exit_code"], 3);
+    assert_eq!(error["error"]["causes"], serde_json::json!([]));
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("game profile \"does-not-exist\" not found"),
+        "{message}"
+    );
+
+    // A command with a JSON form prints nothing before the error object.
+    let error = home.json_failure(3, &["play", "rise", "--dry-run"]);
+    assert_eq!(error["error"]["kind"], "not-found");
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("default bottle \"steam\" not found"),
+        "{message}"
+    );
+}
+
+#[test]
+fn json_errors_carry_the_causes_the_text_form_prints() {
+    let home = Home::new();
+    std::fs::create_dir_all(home.root()).unwrap();
+    std::fs::write(home.root().join("config.toml"), "schema = 1\ncolour = 2\n").unwrap();
+    let error = home.json_failure(4, &["bottle", "list"]);
+    assert_eq!(error["error"]["kind"], "invalid-config");
+    assert_eq!(error["error"]["exit_code"], 4);
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("invalid config "), "{message}");
+    assert!(message.contains("colour"), "{message}");
+}
+
+#[test]
+fn text_errors_use_the_same_exit_codes_and_keep_stdout_empty() {
+    let home = Home::new();
+    home.uncork()
+        .args(["profile", "show", "does-not-exist"])
+        .assert()
+        .code(3)
+        .stdout("")
+        .stderr(contains("error: game profile \"does-not-exist\" not found"));
+}
+
+#[test]
+fn the_binary_s_own_errors_are_other_with_code_1() {
+    let home = Home::new();
+    let error = home.json_failure(1, &["play", "rise", "-e", "1BAD=x"]);
+    assert_eq!(error["error"]["kind"], "other");
+    assert_eq!(error["error"]["exit_code"], 1);
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("invalid --env"), "{message}");
+}
+
+#[test]
+fn usage_errors_stay_text_with_code_2_even_with_json() {
+    let home = Home::new();
+    home.uncork()
+        .args(["--json", "frobnicate"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(contains("unrecognized subcommand"));
 }

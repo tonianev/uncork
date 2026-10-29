@@ -2,6 +2,8 @@
 
 use std::io::{BufRead, IsTerminal, Write as _};
 
+use serde::Serialize;
+
 /// Configure `tracing` from `-v` count; `RUST_LOG` wins when set.
 /// 0 → warn, 1 → info, 2 → debug, 3+ → trace. Output to stderr, no timestamps.
 pub fn init_logging(verbose: u8) {
@@ -24,25 +26,85 @@ pub fn init_logging(verbose: u8) {
         .try_init();
 }
 
-/// Print `error: <message>` and each `caused by: <source>` line to stderr.
+/// A failure as `uncork` reports it: the kind and exit code of the first
+/// [`uncork_core::Error`] in the chain (`other` and 1 when there is none,
+/// an error of the binary's own), the top-level message, and the causes
+/// under it.
 ///
 /// Many errors already include their source in their own message
-/// (`cannot read <path>: <io error>`); a cause whose text was already
-/// printed is skipped so it is not shown twice.
-pub fn print_error(err: &anyhow::Error) {
-    let mut stderr = std::io::stderr().lock();
-    let mut printed = err.to_string();
-    // Nothing useful can be done when stderr itself fails.
-    let _ = writeln!(stderr, "error: {printed}");
-    for cause in err.chain().skip(1) {
-        let text = cause.to_string();
-        if text.is_empty() || printed.contains(&text) {
-            continue;
+/// (`cannot read <path>: <io error>`); a cause whose text is already in the
+/// message or an earlier cause is left out so it is not shown twice. The
+/// text form ([`print_error`]) and the JSON form ([`print_json_error`])
+/// carry the same strings.
+#[derive(Debug, Serialize)]
+pub struct ErrorReport {
+    /// [`uncork_core::Error::kind`], or `other`.
+    pub kind: &'static str,
+    /// The top-level message.
+    pub message: String,
+    /// The causes under it, outermost first, without repeats.
+    pub causes: Vec<String>,
+    /// [`uncork_core::Error::exit_code`], or 1.
+    pub exit_code: u8,
+}
+
+impl ErrorReport {
+    /// Classify `err` and collect its messages.
+    #[must_use]
+    pub fn new(err: &anyhow::Error) -> ErrorReport {
+        let core = err
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<uncork_core::Error>());
+        let (kind, exit_code) = core.map_or(("other", 1), |err| (err.kind(), err.exit_code()));
+        let message = err.to_string();
+        let mut seen = message.clone();
+        let mut causes = Vec::new();
+        for cause in err.chain().skip(1) {
+            let text = cause.to_string();
+            if text.is_empty() || seen.contains(&text) {
+                continue;
+            }
+            seen.push('\n');
+            seen.push_str(&text);
+            causes.push(text);
         }
-        let _ = writeln!(stderr, "caused by: {text}");
-        printed.push('\n');
-        printed.push_str(&text);
+        ErrorReport {
+            kind,
+            message,
+            causes,
+            exit_code,
+        }
     }
+}
+
+/// Print `error: <message>` and each `caused by: <cause>` line to stderr.
+pub fn print_error(report: &ErrorReport) {
+    let mut stderr = std::io::stderr().lock();
+    // Nothing useful can be done when stderr itself fails.
+    let _ = writeln!(stderr, "error: {}", report.message);
+    for cause in &report.causes {
+        let _ = writeln!(stderr, "caused by: {cause}");
+    }
+}
+
+/// Print `{"error": <report>}` as pretty JSON to stdout: the one value a
+/// caller of `uncork --json` parses when the command fails.
+pub fn print_json_error(report: &ErrorReport) {
+    match error_json(report) {
+        Ok(text) => println!("{text}"),
+        // Strings and a number always serialize; should that ever change,
+        // the text form is better than nothing.
+        Err(_) => print_error(report),
+    }
+}
+
+/// `{"error": <report>}`, pretty-printed.
+fn error_json(report: &ErrorReport) -> serde_json::Result<String> {
+    #[derive(Serialize)]
+    struct Envelope<'a> {
+        error: &'a ErrorReport,
+    }
+    serde_json::to_string_pretty(&Envelope { error: report })
 }
 
 /// Print `value` as pretty JSON to stdout.
@@ -378,5 +440,68 @@ mod tests {
         progress.finish();
         progress.start("again", None);
         assert_eq!(progress.done, 0, "start resets the counters");
+    }
+
+    fn not_found(name: &str) -> uncork_core::Error {
+        uncork_core::Error::NotFound {
+            what: "bottle",
+            name: name.to_owned(),
+            hint: String::new(),
+        }
+    }
+
+    #[test]
+    fn error_reports_classify_by_the_first_core_error_in_the_chain() {
+        let err = anyhow::Error::from(not_found("x")).context("cannot play X");
+        let report = ErrorReport::new(&err);
+        assert_eq!(report.kind, "not-found");
+        assert_eq!(report.exit_code, 3);
+        assert_eq!(report.message, "cannot play X");
+        assert_eq!(report.causes, ["bottle \"x\" not found"]);
+
+        let plain = anyhow::Error::from(not_found("y"));
+        assert_eq!(ErrorReport::new(&plain).kind, "not-found");
+    }
+
+    #[test]
+    fn error_reports_without_a_core_error_are_other() {
+        let err = anyhow::anyhow!("cancelled");
+        let report = ErrorReport::new(&err);
+        assert_eq!((report.kind, report.exit_code), ("other", 1));
+        assert_eq!(report.message, "cancelled");
+        assert!(report.causes.is_empty());
+    }
+
+    #[test]
+    fn error_reports_skip_causes_already_in_the_message() {
+        let io = std::io::Error::other("disk full");
+        let err = anyhow::Error::from(uncork_core::Error::io("cannot write", "/x", io));
+        let report = ErrorReport::new(&err);
+        assert_eq!(report.kind, "io");
+        assert_eq!(report.exit_code, 1);
+        assert_eq!(report.message, "cannot write /x: disk full");
+        assert!(report.causes.is_empty(), "{:?}", report.causes);
+    }
+
+    #[test]
+    fn error_json_wraps_the_report_in_an_error_key() {
+        let err = anyhow::Error::from(not_found("x")).context("cannot play X");
+        let text = error_json(&ErrorReport::new(&err)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "error": {
+                    "kind": "not-found",
+                    "message": "cannot play X",
+                    "causes": ["bottle \"x\" not found"],
+                    "exit_code": 3
+                }
+            })
+        );
+        assert!(
+            text.contains("\n  \"error\": {\n"),
+            "pretty-printed: {text}"
+        );
     }
 }
