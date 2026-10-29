@@ -87,9 +87,15 @@ Every knob, its default and the evidence for it are in [docs/PERFORMANCE.md](doc
 
 ## Quick start
 
-You need an Apple Silicon Mac with macOS 26 or later, Rosetta 2, the Xcode Command Line Tools and Rust 1.99 or newer. The catalog's Wine runtime is built for macOS 26.0 and later (its Mach-O `minos`); `uncork doctor` itself accepts macOS 14, so it does not catch an older macOS. Uncork has only been run on macOS 27.
+You need an Apple Silicon Mac with macOS 26 or later, Rosetta 2 and the Xcode Command Line Tools; building from source also needs Rust 1.99 or newer. The catalog's Wine runtime is built for macOS 26.0 and later (its Mach-O `minos`); `uncork doctor` itself accepts macOS 14, so it does not catch an older macOS. Uncork has only been run on macOS 27.
 
-Install Uncork, either with Cargo:
+Install Uncork with Homebrew, which gets the signed release build with its shell completions and man pages:
+
+```bash
+brew install tonianev/tap/uncork
+```
+
+or with Cargo:
 
 ```bash
 xcode-select --install                                   # linker and SDK, once
@@ -103,7 +109,7 @@ git clone https://github.com/tonianev/uncork.git && cd uncork
 cargo install --path crates/uncork --locked
 ```
 
-Shell completions: `uncork completions zsh` (or `bash`, `fish`) prints the script and `uncork completions --help` says where to put it. For macOS's default zsh: `mkdir -p ~/.zfunc && uncork completions zsh > ~/.zfunc/_uncork`, with `fpath=(~/.zfunc $fpath)` before `compinit` in `~/.zshrc`.
+Shell completions (Homebrew installs them): `uncork completions zsh` (or `bash`, `fish`) prints the script and `uncork completions --help` says where to put it. For macOS's default zsh: `mkdir -p ~/.zfunc && uncork completions zsh > ~/.zfunc/_uncork`, with `fpath=(~/.zfunc $fpath)` before `compinit` in `~/.zshrc`.
 
 Then check the Mac:
 
