@@ -23,7 +23,8 @@ use clap_complete::Shell;
 )]
 pub struct Cli {
     /// Print machine-readable JSON instead of text (doctor, list, info, show,
-    /// inspect, games, status, logs, launches, --dry-run output and errors).
+    /// inspect, games, status, logs, launches, profile validate, new and
+    /// schema, --dry-run output and errors).
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -74,7 +75,7 @@ pub enum Command {
     #[command(subcommand)]
     Steam(SteamCommand),
 
-    /// List and show game profiles.
+    /// List, show, validate and scaffold game profiles.
     #[command(subcommand)]
     Profile(ProfileCommand),
 
@@ -408,6 +409,41 @@ pub enum ProfileCommand {
         /// Profile id, Steam app id or part of the name.
         game: String,
     },
+    /// Check profile files: the parse, then every rule in profiles/README.md.
+    ///
+    /// Each problem is printed as `file:line: message`; a directory means every `.toml` file in
+    /// it. Any problem makes the exit status 4 (`invalid-config`); with `--json` the files, their
+    /// problems and that error come as one object.
+    Validate {
+        /// Profile files, or directories of them.
+        #[arg(required = true, value_name = "FILE|DIR")]
+        paths: Vec<PathBuf>,
+    },
+    /// Write a new profile for an installed Steam game or a Windows executable, with the facts
+    /// filled in.
+    ///
+    /// A Steam app id is looked up in the bottle's Steam libraries and the game's executable is
+    /// chosen as `uncork play` would choose it; an `.exe` path is inspected on its own. The
+    /// executable's bitness and graphics API and the recommended backend are written in; the
+    /// optional tables are commented examples; `[compat] status` is `untested` until the game has
+    /// been tested through the checklist in docs/COMPATIBILITY.md.
+    New {
+        /// Steam app id of an installed game (`uncork steam games`), or the path of a Windows `.exe`.
+        #[arg(value_name = "APPID|EXE")]
+        target: String,
+        /// Bottle whose Steam libraries hold the game (default: `default_bottle` from config,
+        /// normally `steam`).
+        #[arg(short, long)]
+        bottle: Option<String>,
+        /// Profile id (default: the game's name in kebab-case).
+        #[arg(long)]
+        id: Option<String>,
+        /// Write to this file instead of standard output; an existing file is not overwritten.
+        #[arg(long, value_name = "FILE", default_value = "-")]
+        out: String,
+    },
+    /// Print the JSON schema of the profile format (the checked-in profiles/schema.json).
+    Schema,
 }
 
 /// `uncork winetricks`.

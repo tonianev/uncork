@@ -61,7 +61,7 @@ exit 3
 | [`uncork runtime`](#uncork-runtime) | Install, list and remove Wine, DXMT, DXVK; import D3DMetal |
 | [`uncork bottle`](#uncork-bottle) | Create, import, configure, stop and delete bottles |
 | [`uncork steam`](#uncork-steam) | Install and start the Windows Steam client; list and launch its games |
-| [`uncork profile`](#uncork-profile) | List and show game profiles |
+| [`uncork profile`](#uncork-profile) | List, show, validate and scaffold game profiles; print their JSON schema |
 | [`uncork winetricks`](#uncork-winetricks) | Run winetricks verbs in a bottle |
 | [`uncork completions`](#uncork-completions) | Print a completion script for zsh, bash, fish, elvish or PowerShell |
 
@@ -90,7 +90,7 @@ Commands:
   runtime      Manage Wine and graphics components
   bottle       Manage bottles (Wine prefixes)
   steam        Install and use the Windows Steam client in a bottle
-  profile      List and show game profiles
+  profile      List, show, validate and scaffold game profiles
   winetricks   Run winetricks verbs in a bottle (needs `brew install winetricks`)
   completions  Print a shell completion script to stdout
   help         Print this message or the help of the given subcommand(s)
@@ -98,7 +98,7 @@ Commands:
 Options:
       --json
           Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
-          status, logs, launches, --dry-run output and errors)
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
 
   -v, --verbose...
           More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
@@ -121,7 +121,8 @@ Usage: uncork doctor [OPTIONS]
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -140,7 +141,8 @@ Usage: uncork setup [OPTIONS]
 Options:
       --bottle <BOTTLE>  Name of the bottle to create for Steam [default: steam]
       --json             Print machine-readable JSON instead of text (doctor, list, info, show,
-                         inspect, games, status, logs, launches, --dry-run output and errors)
+                         inspect, games, status, logs, launches, profile validate, new and schema,
+                         --dry-run output and errors)
       --no-steam         Do not install Steam (components and bottle only)
   -v, --verbose...       More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -y, --yes              Answer yes to downloads
@@ -176,7 +178,7 @@ Options:
 
       --json
           Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
-          status, logs, launches, --dry-run output and errors)
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
 
       --backend <BACKEND>
           Graphics backend for this launch
@@ -246,7 +248,7 @@ Options:
 
       --json
           Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
-          status, logs, launches, --dry-run output and errors)
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
 
       --backend <BACKEND>
           Graphics backend for this launch
@@ -308,7 +310,8 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -329,7 +332,8 @@ Usage: uncork status [OPTIONS]
 Options:
   -b, --bottle <BOTTLE>  One bottle (default: every bottle)
       --json             Print machine-readable JSON instead of text (doctor, list, info, show,
-                         inspect, games, status, logs, launches, --dry-run output and errors)
+                         inspect, games, status, logs, launches, profile validate, new and schema,
+                         --dry-run output and errors)
   -v, --verbose...       More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help             Print help
   -V, --version          Print version
@@ -349,7 +353,8 @@ Usage: uncork logs [OPTIONS]
 Options:
   -b, --bottle <BOTTLE>  Bottle (default: `default_bottle` from config, normally `steam`)
       --json             Print machine-readable JSON instead of text (doctor, list, info, show,
-                         inspect, games, status, logs, launches, --dry-run output and errors)
+                         inspect, games, status, logs, launches, profile validate, new and schema,
+                         --dry-run output and errors)
   -g, --game <GAME>      Only this game's logs: a profile id, Steam app id or name, else a program
                          name (`riseofnations.exe`, `steam` for the Steam client)
   -v, --verbose...       More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
@@ -377,7 +382,8 @@ Commands:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -392,7 +398,8 @@ Usage: uncork runtime list [OPTIONS]
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -407,7 +414,8 @@ Usage: uncork runtime available [OPTIONS]
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -427,7 +435,8 @@ Arguments:
 
 Options:
       --json               Print machine-readable JSON instead of text (doctor, list, info, show,
-                           inspect, games, status, logs, launches, --dry-run output and errors)
+                           inspect, games, status, logs, launches, profile validate, new and schema,
+                           --dry-run output and errors)
       --version <VERSION>  Exact version (only with a single kind)
   -v, --verbose...         More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -y, --yes                Answer yes to downloads
@@ -447,7 +456,8 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
 ```
@@ -464,7 +474,8 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -492,7 +503,8 @@ Commands:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -507,7 +519,8 @@ Usage: uncork bottle list [OPTIONS]
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -525,7 +538,8 @@ Arguments:
 
 Options:
       --json               Print machine-readable JSON instead of text (doctor, list, info, show,
-                           inspect, games, status, logs, launches, --dry-run output and errors)
+                           inspect, games, status, logs, launches, profile validate, new and schema,
+                           --dry-run output and errors)
       --wine <WINE>        Wine component version (default: newest installed)
   -v, --verbose...         More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
       --windows <WINDOWS>  Windows version: win7, win81, win10, win11 [default: win10]
@@ -545,7 +559,8 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -577,7 +592,7 @@ Arguments:
 Options:
       --json
           Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
-          status, logs, launches, --dry-run output and errors)
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
 
   -v, --verbose...
           More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
@@ -601,7 +616,8 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -y, --yes         Do not ask for confirmation
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
@@ -622,7 +638,8 @@ Arguments:
 
 Options:
       --json         Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                     games, status, logs, launches, --dry-run output and errors)
+                     games, status, logs, launches, profile validate, new and schema, --dry-run
+                     output and errors)
       --name <NAME>  Name for the new bottle (default: the directory name)
       --move         Move instead of cloning (cloning is instant on APFS and leaves the original
                      untouched)
@@ -645,7 +662,8 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -663,7 +681,8 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -684,7 +703,8 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -706,7 +726,8 @@ Commands:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -724,7 +745,8 @@ Usage: uncork steam install [OPTIONS]
 Options:
   -b, --bottle <BOTTLE>  Bottle (default: `steam`)
       --json             Print machine-readable JSON instead of text (doctor, list, info, show,
-                         inspect, games, status, logs, launches, --dry-run output and errors)
+                         inspect, games, status, logs, launches, profile validate, new and schema,
+                         --dry-run output and errors)
   -v, --verbose...       More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -y, --yes              Answer yes to the download
   -h, --help             Print help
@@ -746,7 +768,7 @@ Options:
 
       --json
           Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
-          status, logs, launches, --dry-run output and errors)
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
 
       --backend <BACKEND>
           Graphics backend for this launch
@@ -804,7 +826,8 @@ Usage: uncork steam games [OPTIONS]
 Options:
   -b, --bottle <BOTTLE>  Bottle (default: `steam`)
       --json             Print machine-readable JSON instead of text (doctor, list, info, show,
-                         inspect, games, status, logs, launches, --dry-run output and errors)
+                         inspect, games, status, logs, launches, profile validate, new and schema,
+                         --dry-run output and errors)
   -v, --verbose...       More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help             Print help
   -V, --version          Print version
@@ -832,7 +855,7 @@ Options:
 
       --json
           Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
-          status, logs, launches, --dry-run output and errors)
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
 
       --backend <BACKEND>
           Graphics backend for this launch
@@ -883,18 +906,23 @@ Options:
 ## uncork profile
 
 ```text
-List and show game profiles
+List, show, validate and scaffold game profiles
 
 Usage: uncork profile [OPTIONS] <COMMAND>
 
 Commands:
-  list  List profiles with their compatibility status
-  show  Show one profile
-  help  Print this message or the help of the given subcommand(s)
+  list      List profiles with their compatibility status
+  show      Show one profile
+  validate  Check profile files: the parse, then every rule in profiles/README.md
+  new       Write a new profile for an installed Steam game or a Windows executable, with the facts
+            filled in
+  schema    Print the JSON schema of the profile format (the checked-in profiles/schema.json)
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -909,7 +937,8 @@ Usage: uncork profile list [OPTIONS]
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -929,7 +958,104 @@ Arguments:
 
 Options:
       --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
-                    games, status, logs, launches, --dry-run output and errors)
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
+  -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
+  -h, --help        Print help
+  -V, --version     Print version
+```
+
+## uncork profile validate
+
+Exit status 4 (`invalid-config`) when any file has a problem; the error names the first such file. Every file is listed: `file:line: message` per problem (the line of the key, or of its table when the key is missing; no line when the parse failed before a line was known), `file: ok` for a valid one, then a count. With `--json`, stdout is one object: `profiles`, one entry per file with `path`, `id` (null when it did not parse) and `problems` (`line`, `key`, `message`), and `error`, null when every file is valid, else the error object of [Exit codes and JSON errors](#exit-codes-and-json-errors). The rules are listed in [profiles/README.md](../profiles/README.md#validation); `just profiles-check` runs this on `profiles/`.
+
+```text
+Check profile files: the parse, then every rule in profiles/README.md.
+
+Each problem is printed as `file:line: message`; a directory means every `.toml` file in it. Any
+problem makes the exit status 4 (`invalid-config`); with `--json` the files, their problems and that
+error come as one object.
+
+Usage: uncork profile validate [OPTIONS] <FILE|DIR>...
+
+Arguments:
+  <FILE|DIR>...
+          Profile files, or directories of them
+
+Options:
+      --json
+          Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
+
+  -v, --verbose...
+          More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+```
+
+## uncork profile new
+
+Reads the bottle's Steam libraries and the executable; nothing is started, and nothing is written unless `--out` names a file, which must not exist yet. The executable is the one `uncork play` would start (the largest plausible `.exe` at the shallowest level of the install directory), so check `[exe] path` when the game has a launcher. The backend is judged with every backend available, because a profile describes the game and not this Mac (`uncork inspect` shows what is installed here). The facts read from the executable go into the header comment, the next steps to stderr. `--json` prints one object: `id`, `name`, `appid` (null for an `.exe` path), `exe` and `toml`.
+
+```text
+Write a new profile for an installed Steam game or a Windows executable, with the facts filled in.
+
+A Steam app id is looked up in the bottle's Steam libraries and the game's executable is chosen as
+`uncork play` would choose it; an `.exe` path is inspected on its own. The executable's bitness and
+graphics API and the recommended backend are written in; the optional tables are commented examples;
+`[compat] status` is `untested` until the game has been tested through the checklist in
+docs/COMPATIBILITY.md.
+
+Usage: uncork profile new [OPTIONS] <APPID|EXE>
+
+Arguments:
+  <APPID|EXE>
+          Steam app id of an installed game (`uncork steam games`), or the path of a Windows `.exe`
+
+Options:
+  -b, --bottle <BOTTLE>
+          Bottle whose Steam libraries hold the game (default: `default_bottle` from config,
+          normally `steam`)
+
+      --json
+          Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
+
+      --id <ID>
+          Profile id (default: the game's name in kebab-case)
+
+  -v, --verbose...
+          More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
+
+      --out <FILE>
+          Write to this file instead of standard output; an existing file is not overwritten
+
+          [default: -]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+```
+
+## uncork profile schema
+
+The same text as the checked-in `profiles/schema.json`; `just profiles-schema` rewrites the file, and a unit test fails CI when it is stale. The repository's `.taplo.toml` maps `profiles/*.toml` to it for taplo and the Even Better TOML extension ([profiles/README.md](../profiles/README.md#tools)).
+
+```text
+Print the JSON schema of the profile format (the checked-in profiles/schema.json)
+
+Usage: uncork profile schema [OPTIONS]
+
+Options:
+      --json        Print machine-readable JSON instead of text (doctor, list, info, show, inspect,
+                    games, status, logs, launches, profile validate, new and schema, --dry-run
+                    output and errors)
   -v, --verbose...  More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help        Print help
   -V, --version     Print version
@@ -948,7 +1074,8 @@ Arguments:
 Options:
   -b, --bottle <BOTTLE>  Bottle (default: `steam`)
       --json             Print machine-readable JSON instead of text (doctor, list, info, show,
-                         inspect, games, status, logs, launches, --dry-run output and errors)
+                         inspect, games, status, logs, launches, profile validate, new and schema,
+                         --dry-run output and errors)
   -v, --verbose...       More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides
   -h, --help             Print help
   -V, --version          Print version
@@ -983,7 +1110,7 @@ Arguments:
 Options:
       --json
           Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
-          status, logs, launches, --dry-run output and errors)
+          status, logs, launches, profile validate, new and schema, --dry-run output and errors)
 
   -v, --verbose...
           More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides

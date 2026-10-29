@@ -58,20 +58,29 @@ Run a game with Uncork, then open a "Game report" issue from the [issue chooser]
 
 ### Write or fix a game profile
 
-A profile is one TOML file in [profiles/](profiles/); the schema is in [profiles/README.md](profiles/README.md).
+A profile is one TOML file in [profiles/](profiles/); the format, the validation rules and the commands below are in [profiles/README.md](profiles/README.md).
 
 ```bash
-# 1. Learn the facts about the executable: bitness, graphics API, large-address-aware, NX.
-uncork inspect "/path/to/Game/game.exe"
-# 2. Try your profile without rebuilding: user profiles override built-ins with the same id.
+# 1. Scaffold it from the installed game (a Steam app id from `uncork steam games`, or the
+#    path of an .exe): the executable's bitness, graphics API and flags, the recommended
+#    backend with its reason, and commented examples of the optional tables.
+uncork profile new 287450 --out profiles/my-game.toml
+# 2. Edit it: keep only the settings the game needs and say why in a comment, with a source
+#    where one exists. profiles/schema.json gives an editor completion and checks (.taplo.toml).
+# 3. Check it: the parse, then every rule, each problem with its line.
+uncork profile validate profiles/my-game.toml
+# 4. Try it without rebuilding: user profiles override built-ins with the same id.
 mkdir -p "$UNCORK_HOME/profiles" && cp profiles/my-game.toml "$UNCORK_HOME/profiles/"
 uncork profile show my-game
 uncork play my-game --dry-run
-# 3. Validate every built-in profile (the unit tests parse and check each file).
-cargo test -p uncork-core
+uncork play my-game --hud
+# 5. Fill [compat] from the checklist in docs/COMPATIBILITY.md and add the game's row to its
+#    "Current results" table; then run every profile check (the built-ins, profiles/schema.json,
+#    and that each built-in status matches that table).
+just profiles-check
 ```
 
-A profile PR states in its description which macOS version, chip and Uncork commit it was tested on. Comments in the TOML say why each non-default setting is there, with a source where one exists.
+A profile PR states in its description which macOS version, chip and Uncork commit it was tested on. `[compat] status` stays `untested` until the checklist has been run; reaching the main menu does not make a game `playable`.
 
 ### Update a catalog pin
 

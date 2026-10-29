@@ -115,7 +115,17 @@ impl Machine {
 /// through its 32-bit (`WoW64`) or 64-bit path and which DLL directory
 /// (`syswow64` or `system32`) a graphics backend must be installed into.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Bitness {
@@ -130,7 +140,17 @@ pub enum Bitness {
 /// The derived order is oldest to newest; [`GameScan::primary_api`] returns the
 /// greatest detected value.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum GraphicsApi {

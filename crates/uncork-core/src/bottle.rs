@@ -29,7 +29,9 @@ pub const CONFIG_FILE: &str = "uncork.toml";
 pub const STATE_FILE: &str = "uncork-state.toml";
 
 /// The Windows version Wine reports to programs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum WindowsVersion {
     /// Windows 7.

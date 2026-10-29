@@ -277,7 +277,11 @@ pub fn builtin_dll(tag: &str) -> Vec<u8> {
 /// Parse a profile, checking it is valid.
 pub fn profile(text: &str) -> GameProfile {
     let profile = GameProfile::parse(text, Path::new("test.toml")).unwrap();
-    assert_eq!(profile.problems(), Vec::<String>::new(), "{text}");
+    assert!(
+        profile.problems().is_empty(),
+        "{text}: {:?}",
+        profile.problems()
+    );
     profile
 }
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use common::PeBuilder;
 use predicates::prelude::*;
 use predicates::str::contains;
-use support::Home;
+use support::{FAKE_WINE, Home};
 
 /// A 32-bit D3D11 game: `game.exe` importing `d3d11.dll`, plus
 /// `steam_api.dll` beside it.
@@ -652,4 +652,236 @@ fn usage_errors_stay_text_with_code_2_even_with_json() {
         .code(2)
         .stdout("")
         .stderr(contains("unrecognized subcommand"));
+}
+
+#[test]
+fn profile_validate_names_each_problem_with_its_line_and_fails() {
+    let home = Home::new();
+    let dir = home.path().join("profiles");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("good.toml"),
+        "schema = 1\nid = \"good\"\nname = \"Good\"\n[exe]\npath = \"good.exe\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("bad.toml"),
+        "schema = 1\nid = \"bad\"\nname = \"Bad\"\n\n[steam]\nappid = 0\n\n[exe]\npath = \"C:/bad.exe\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("broken.toml"),
+        "schema = 1\nid = \"broken\"\nname = \"B\"\n[exe]\npath = \"b.exe\"\n[graphics]\nbackend = \"metal\"\n",
+    )
+    .unwrap();
+    let good = dir.join("good.toml");
+    let bad = dir.join("bad.toml");
+    let broken = dir.join("broken.toml");
+
+    home.uncork()
+        .args(["profile", "validate"])
+        .arg(&good)
+        .assert()
+        .success()
+        .stdout(format!("{}: ok\n1 profile valid\n", good.display()));
+
+    let output = home
+        .uncork()
+        .args(["profile", "validate"])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4), "invalid-config");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for expected in [
+        format!("{}:6: steam.appid is 0", bad.display()),
+        format!("{}:9: exe.path \"C:/bad.exe\" is absolute", bad.display()),
+        format!("{}:7: unknown variant `metal`", broken.display()),
+        format!("{}: ok\n", good.display()),
+    ] {
+        assert!(stdout.contains(&expected), "{expected:?} not in {stdout}");
+    }
+    assert!(
+        stdout.ends_with("3 problems in 2 of 3 profiles\n"),
+        "{stdout}"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with("error: invalid profile ") && stderr.contains("3 problems in 2 files"),
+        "{stderr}"
+    );
+
+    // With --json, stdout is one object: the files and the error.
+    let json = home.json_failure(4, &["profile", "validate", bad.to_str().unwrap()]);
+    assert_eq!(json["profiles"][0]["id"], "bad");
+    assert_eq!(json["profiles"][0]["problems"][0]["line"], 6);
+    assert_eq!(json["profiles"][0]["problems"][0]["key"], "steam.appid");
+    assert_eq!(json["profiles"][0]["problems"][1]["key"], "exe.path");
+    assert_eq!(json["error"]["kind"], "invalid-config");
+    assert_eq!(json["error"]["exit_code"], 4);
+    let json = home.json(&["profile", "validate", good.to_str().unwrap()]);
+    assert_eq!(json["profiles"][0]["problems"], serde_json::json!([]));
+    assert_eq!(json["error"], serde_json::Value::Null);
+
+    let stderr = home.stderr_of_failure_with(1, &["profile", "validate", "/nonexistent/x.toml"]);
+    assert!(
+        stderr.contains("cannot read /nonexistent/x.toml"),
+        "{stderr}"
+    );
+    let empty = home.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let output = home
+        .uncork()
+        .args(["profile", "validate"])
+        .arg(&empty)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3), "not-found");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("has no .toml file"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn profile_new_scaffolds_a_valid_profile_from_an_executable() {
+    let home = Home::new();
+    let exe = d3d11_game(home.path());
+    let output = home
+        .uncork()
+        .args(["profile", "new"])
+        .arg(&exe)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    for expected in [
+        "# game.\n",
+        "read from game.exe and the DLLs beside it:\n# 32-bit (PE32), not large-address-aware, NX-compatible; D3D11 (d3d11.dll\n# imported by game.exe); Steamworks; no anti-cheat files.",
+        "schema = 1\nid = \"game\"\nname = \"game\"\n",
+        "# [steam]\n# appid = 123456",
+        "[exe]\npath = \"game.exe\"\nbitness = \"x86\"\napi = \"d3d11\"\n# geometry_shaders = true",
+        "[graphics]\n# 32-bit D3D11: DXMT (D3DMetal is 64-bit only)\nbackend = \"dxmt\"\nfallbacks = [\"wined3d\", \"dxvk\"]\n",
+        "# [env]\n# WINE_LARGE_ADDRESS_AWARE = \"1\"",
+        "# [dll_overrides]\n",
+        "# [[ini]]\n",
+        "[compat]\nstatus = \"untested\"\nnotes = \"\"\n",
+    ] {
+        assert!(text.contains(expected), "{expected:?} not in:\n{text}");
+    }
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with("Next: save this as profiles/game.toml"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("`uncork run {}`", exe.display())),
+        "{stderr}"
+    );
+    assert!(stderr.contains("docs/COMPATIBILITY.md"), "{stderr}");
+
+    // The scaffold validates under the name the hint gives it.
+    let file = home.path().join("game.toml");
+    std::fs::write(&file, &text).unwrap();
+    home.uncork()
+        .args(["profile", "validate"])
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout(contains("1 profile valid"));
+
+    let stderr = home.stderr_of_failure_with(1, &["profile", "new", "/nonexistent/game.exe"]);
+    assert!(stderr.contains("does not exist"), "{stderr}");
+}
+
+#[test]
+fn profile_new_finds_a_steam_game_the_way_play_does() {
+    let home = Home::new();
+    home.write_bottle("steam", FAKE_WINE);
+    let steam = home.install_fake_steam("steam", &[(70, "Half-Life: Source", 4)]);
+    let dir = steam.join("steamapps/common/Half-Life Source");
+    PeBuilder::pe64()
+        .import("d3d12.dll")
+        .data(&[0; 4096])
+        .write(&dir.join("hl.exe"));
+    PeBuilder::pe64()
+        .import("kernel32.dll")
+        .data(&[0; 65536])
+        .write(&dir.join("unins000.exe"));
+    let out = home.path().join("half-life-source.toml");
+
+    let output = home
+        .uncork()
+        .args(["profile", "new", "70", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "--out writes nothing to stdout");
+    let text = std::fs::read_to_string(&out).unwrap();
+    for expected in [
+        "# Half-Life: Source (Steam app 70, build 14787288).\n",
+        "id = \"half-life-source\"\nname = \"Half-Life: Source\"\n\n[steam]\nappid = 70\n",
+        "# 64-bit (PE32+), large-address-aware, NX-compatible; D3D12 (d3d12.dll\n# imported by hl.exe); no Steamworks; no anti-cheat files.",
+        "[exe]\npath = \"hl.exe\"\nbitness = \"x64\"\napi = \"d3d12\"\n",
+        "[graphics]\n# 64-bit D3D12: D3DMetal (only D3DMetal runs D3D12)\nbackend = \"d3dmetal\"\nfallbacks = []\n",
+        "# [env]\n# DXMT_CONFIG",
+    ] {
+        assert!(text.contains(expected), "{expected:?} not in:\n{text}");
+    }
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with(&format!("Wrote {}.\n", out.display())),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("`uncork play half-life-source`"),
+        "{stderr}"
+    );
+
+    let stderr =
+        home.stderr_of_failure_with(1, &["profile", "new", "70", "--out", out.to_str().unwrap()]);
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), text, "left alone");
+
+    let json = home.json(&["profile", "new", "70", "--id", "hl"]);
+    assert_eq!(json["id"], "hl");
+    assert_eq!(json["appid"], 70);
+    assert_eq!(json["exe"], dir.join("hl.exe").to_str().unwrap());
+    assert!(
+        json["toml"].as_str().unwrap().contains("id = \"hl\"\n"),
+        "{json}"
+    );
+
+    let stderr = home.stderr_of_failure_with(1, &["profile", "new", "70", "--id", "Half Life"]);
+    assert!(
+        stderr.contains("would not validate") && stderr.contains("kebab-case"),
+        "{stderr}"
+    );
+    let stderr = home.stderr_of_failure_with(3, &["profile", "new", "71"]);
+    assert!(
+        stderr.contains("Steam app \"71\" not found; install it from the Steam library first"),
+        "{stderr}"
+    );
+    let stderr = home.stderr_of_failure_with(3, &["profile", "new", "70", "--bottle", "other"]);
+    assert!(stderr.contains("bottle \"other\" not found"), "{stderr}");
+}
+
+#[test]
+fn profile_schema_prints_the_checked_in_schema() {
+    let home = Home::new();
+    let text = home.stdout(&["profile", "schema"]);
+    assert_eq!(text, include_str!("../../../profiles/schema.json"));
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json["title"], "Uncork game profile");
+    assert_eq!(json["required"][0], "schema");
 }

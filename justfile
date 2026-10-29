@@ -76,9 +76,15 @@ run *ARGS:
 install:
     cargo install --path crates/uncork --locked
 
-# Parse and validate every game profile under profiles/.
+# Validate every game profile under profiles/: `uncork profile validate` on the files, then the
+# unit tests that check the built-ins, profiles/schema.json and the status table in docs/COMPATIBILITY.md.
 profiles-check:
+    cargo run -p uncork -- profile validate profiles
     cargo test -p uncork-core profile
+
+# Regenerate profiles/schema.json from the profile types in crates/uncork-core (CI fails when it is stale).
+profiles-schema:
+    cargo run -p uncork -- profile schema > profiles/schema.json
 
 # Rewrite docs/CLI.md from every command's --help (CI fails when it is out of date).
 cli-doc:

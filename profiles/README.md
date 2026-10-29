@@ -1,6 +1,6 @@
 # Game profiles
 
-A game profile is one TOML file that tells Uncork how to run one game well: which executable renders it, which graphics backend to prefer, which Wine, performance, environment and DLL settings it needs, how to start it, which INI keys to enforce, and how well it runs. This document is the file format, field by field, with the validation rules and the semantics of INI edits and launch modes. How to test a game and add a profile is in [docs/COMPATIBILITY.md](../docs/COMPATIBILITY.md). The Rust definition is `uncork_core::profile`.
+A game profile is one TOML file that tells Uncork how to run one game well: which executable renders it, which graphics backend to prefer, which Wine, performance, environment and DLL settings it needs, how to start it, which INI keys to enforce, and how well it runs. This document is the file format, field by field, with the commands that scaffold and check a profile, the validation rules and the semantics of INI edits and launch modes. How to test a game and add a profile is in [docs/COMPATIBILITY.md](../docs/COMPATIBILITY.md). The Rust definition is `uncork_core::profile`; `profiles/schema.json` is the same model as a JSON Schema.
 
 ## Files and precedence
 
@@ -14,6 +14,25 @@ The file name is the profile id plus `.toml`. A user file that fails to parse is
 `uncork play <query>` and `uncork profile show <query>` find a profile by, in order: exact id; Steam app id (when the query is all digits); exact name, ignoring case; a substring of an id or name, ignoring case. The first of these steps that matches anything decides. One match is used; several are an error that lists the candidate ids, so pick one by its id. `uncork play rise-of-nations` works because only one profile id contains `rise-of-nations`. Two profiles with the same `[steam] appid`, such as a user profile `rise-of-nations-wined3d` next to the built-in one, make `uncork play 287450` and `uncork steam launch 287450` ambiguous; `uncork play rise-of-nations-wined3d` picks one. Only when no profile matches does `uncork play <Steam app id>` start an installed game without a profile.
 
 Settings layer from lowest to highest precedence: the bottle's `uncork.toml`, the profile, then command-line flags (`--backend`, `--hud`, `--metalfx`, `--retina`, `-e KEY=VALUE`). For environment variables and DLL overrides, later layers win per key.
+
+## Tools
+
+Three `uncork profile` subcommands take a profile from nothing to checked; their full option lists are in [docs/CLI.md](../docs/CLI.md#uncork-profile).
+
+| Command | Does |
+|---|---|
+| `uncork profile new <appid>` | Writes a scaffold for an installed Steam game: the game is found in the bottle's Steam libraries (`--bottle`, default `steam`), its executable is chosen as `uncork play` would choose it, and the file gets `[steam] appid`, `name`, `[exe] path`, `bitness` and `api` from the executable, the recommended `[graphics] backend` and `fallbacks` with the reason as a comment, commented examples of `[wine]`, `[env]`, `[dll_overrides]` and `[[ini]]`, and `[compat] status = "untested"`. The facts read from the executable (flags, graphics evidence, Steamworks, anti-cheat files) are the header comment. The id is the name in kebab-case unless `--id` says otherwise; the file goes to stdout unless `--out FILE` names a file that does not exist yet |
+| `uncork profile new <game.exe>` | The same for a game that is not on Steam: the executable's directory is the install directory and gives the name; `[steam]` is a commented example |
+| `uncork profile validate <file-or-dir>...` | Parses each file (every `.toml` in a directory) with the loader Uncork uses and applies the rules under [Validation](#validation), including that `id` equals the file name. Each problem is one line, `file:line: message`, with the line of the key or of its table; exit status 4 when any file has a problem, and `--json` gives the same as one object. `just profiles-check` runs it on this directory |
+| `uncork profile schema` | Prints the JSON Schema of the format, generated from the Rust types with `schemars`: the same text as `profiles/schema.json` |
+
+A scaffold passes `uncork profile validate` as written. It is a starting point, not a finding: delete the examples the game does not need, and say in a comment why each setting that stays is there.
+
+### Editor support
+
+`profiles/schema.json` is derived from `uncork_core::profile` (`just profiles-schema` regenerates it; a unit test fails CI when the file and the model differ), so it carries every field, its type and the defaults, the enum values of `bitness`, `api`, `backend`, `windows_version`, `mode` and `status`, `additionalProperties: false` for every table, and the rules JSON Schema can express: the `id` and `[env]` name patterns, the `appid` minimum, the `dll_overrides` values, the `[[ini]] file` prefixes, the report `date` shape. The rules that need the whole file (`id` equals the file name, a backend fits the declared bitness and API, DXVK with geometry shaders, a launch mode without `[steam]`, notes with a tested status) are only in `uncork profile validate`.
+
+[taplo](https://taplo.tamasfe.dev) and the [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml) extension for VS Code read the repository's `.taplo.toml`, which maps `profiles/*.toml` to the schema, so a profile opened in a checkout gets completion, hover text and errors as you type, and `taplo check profiles/*.toml` checks them from the command line. For a profile elsewhere, such as `$UNCORK_HOME/profiles/`, point the extension's `evenBetterToml.schema.associations` setting (a file pattern to a `file://` URL of `schema.json`) at it, or copy `.taplo.toml` next to the file with `path` adjusted.
 
 ## Example
 
@@ -175,11 +194,12 @@ Test results, newest first. Every key except `notes` is required.
 
 ## Validation
 
-A profile with any of these problems is rejected (`cargo test -p uncork-core` checks every built-in profile):
+A profile with any of these problems is rejected: `uncork profile validate` lists each with its line, a user profile with one is skipped with a warning, and `just profiles-check` (`cargo test -p uncork-core profile` plus `uncork profile validate profiles`) fails for a built-in one. Every rule is implemented in `GameProfile::problems` in `crates/uncork-core/src/profile.rs`; a misspelt or unknown key, or a value of the wrong type, is already a parse error with its line.
 
 - `schema` is not `1`.
-- `id` is not kebab-case (`^[a-z0-9]+(-[a-z0-9]+)*$`) or is longer than 64 characters.
+- `id` is not kebab-case (`^[a-z0-9]+(-[a-z0-9]+)*$`), is longer than 64 characters, or differs from the file name without `.toml`.
 - `name` is empty.
+- `[steam] appid` is `0`.
 - `[exe] path` is empty, absolute, contains `\` or contains `..`.
 - An `[env]` name does not match `^[A-Za-z_][A-Za-z0-9_]*$`.
 - A `[dll_overrides]` value is not one of `n`, `b`, `n,b`, `b,n`, `d` or empty.
@@ -187,8 +207,12 @@ A profile with any of these problems is rejected (`cargo test -p uncork-core` ch
 - A backend in `backend` or `fallbacks` cannot run the declared `bitness` and `api` (for example D3DMetal for a 32-bit game, or DXMT for Direct3D 9).
 - DXVK appears in `backend` or `fallbacks` while `geometry_shaders = true`.
 - `mode` is `direct` or `applaunch` without a `[steam]` table.
-- An `[[ini]] file` does not start with a known base, or contains `..`.
+- An `[[ini]] file` does not start with a known base, or contains `..`; an `[[ini]] section` or `key` is empty.
 - An `[[ini]] value` contains a `{...}` token other than `{display.width}`, `{display.height}` and `{display.refresh}`.
+- `[compat] notes` is empty while `status` is not `untested`: a result needs what players should know.
+- A `[[compat.reports]] date` is not `YYYY-MM-DD`.
+
+The unit tests also check that `profiles/schema.json` equals the schema generated from the types, and that each built-in profile's `[compat] status` equals the one shown for its app id in the "Current results" table of [docs/COMPATIBILITY.md](../docs/COMPATIBILITY.md#current-results).
 
 ## INI edits
 

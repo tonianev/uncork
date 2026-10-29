@@ -22,6 +22,7 @@ uncork-steam = { path = "crates/uncork-steam" }
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 serde_json = "1"
+schemars = "1"
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"

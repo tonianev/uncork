@@ -1,0 +1,11 @@
+# taplo configuration (the Even Better TOML editor extension and the `taplo`
+# CLI read it): game profiles are checked against profiles/schema.json while
+# you type. `uncork profile validate` is the full check; the schema covers
+# the rules JSON Schema can express. Syntax:
+# https://taplo.tamasfe.dev/configuration/file.html
+
+[[rule]]
+include = ["profiles/*.toml"]
+
+[rule.schema]
+path = "./profiles/schema.json"

@@ -1,0 +1,575 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Uncork game profile",
+  "description": "One game's settings for Uncork: profiles/<id>.toml in the repository, or $UNCORK_HOME/profiles/<id>.toml. The format is documented in profiles/README.md.",
+  "type": "object",
+  "properties": {
+    "compat": {
+      "description": "Compatibility information.",
+      "$ref": "#/$defs/Compat",
+      "default": {
+        "notes": "",
+        "reports": [],
+        "status": "untested"
+      }
+    },
+    "dll_overrides": {
+      "description": "Extra DLL overrides.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": [
+          "n",
+          "b",
+          "n,b",
+          "b,n",
+          "d",
+          ""
+        ]
+      },
+      "default": {}
+    },
+    "env": {
+      "description": "Extra environment variables.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      }
+    },
+    "exe": {
+      "description": "Executable.",
+      "$ref": "#/$defs/ExeRef"
+    },
+    "graphics": {
+      "description": "Graphics preferences.",
+      "$ref": "#/$defs/ProfileGraphics",
+      "default": {
+        "backend": null,
+        "fallbacks": []
+      }
+    },
+    "id": {
+      "description": "Kebab-case id; equals the file stem.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "ini": {
+      "description": "INI keys to enforce before launch.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ProfileIni"
+      }
+    },
+    "launch": {
+      "description": "Launch settings.",
+      "$ref": "#/$defs/ProfileLaunch",
+      "default": {
+        "args": [],
+        "mode": null
+      }
+    },
+    "name": {
+      "description": "Display name.",
+      "type": "string",
+      "minLength": 1
+    },
+    "performance": {
+      "description": "Performance overrides.",
+      "$ref": "#/$defs/ProfilePerformance",
+      "default": {
+        "avx": null,
+        "max_fps": null,
+        "metalfx": null,
+        "retina": null
+      }
+    },
+    "schema": {
+      "description": "Schema version, currently 1.",
+      "type": "integer",
+      "format": "uint32",
+      "maximum": 1,
+      "minimum": 1
+    },
+    "steam": {
+      "description": "Steam identity, if the game is on Steam.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SteamRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "wine": {
+      "description": "Wine settings.",
+      "$ref": "#/$defs/ProfileWine",
+      "default": {
+        "msync": null,
+        "windows_version": null
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "name",
+    "exe"
+  ],
+  "$defs": {
+    "Backend": {
+      "description": "A Direct3D translation layer.",
+      "oneOf": [
+        {
+          "description": "Apple D3DMetal (Game Porting Toolkit).",
+          "type": "string",
+          "const": "d3dmetal"
+        },
+        {
+          "description": "DXMT.",
+          "type": "string",
+          "const": "dxmt"
+        },
+        {
+          "description": "DXVK on MoltenVK.",
+          "type": "string",
+          "const": "dxvk"
+        },
+        {
+          "description": "Wine's built-in WineD3D.",
+          "type": "string",
+          "const": "wined3d"
+        }
+      ]
+    },
+    "Bitness": {
+      "description": "Pointer width of a Windows program, which decides whether Wine runs it\nthrough its 32-bit (`WoW64`) or 64-bit path and which DLL directory\n(`syswow64` or `system32`) a graphics backend must be installed into.",
+      "oneOf": [
+        {
+          "description": "32-bit (PE32, `i386-windows`).",
+          "type": "string",
+          "const": "x86"
+        },
+        {
+          "description": "64-bit (PE32+, `x86_64-windows`).",
+          "type": "string",
+          "const": "x64"
+        }
+      ]
+    },
+    "Compat": {
+      "description": "Compatibility information.",
+      "type": "object",
+      "properties": {
+        "notes": {
+          "description": "What players should know.",
+          "type": "string",
+          "default": ""
+        },
+        "reports": {
+          "description": "Test history, newest first.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TestReport"
+          }
+        },
+        "status": {
+          "description": "Overall status (the best recent report).",
+          "$ref": "#/$defs/CompatStatus",
+          "default": "untested"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CompatStatus": {
+      "description": "How well the game runs. Ordered worst to best.",
+      "oneOf": [
+        {
+          "description": "Nobody has reported a result with Uncork yet.",
+          "type": "string",
+          "const": "untested"
+        },
+        {
+          "description": "Does not start or is unplayable.",
+          "type": "string",
+          "const": "broken"
+        },
+        {
+          "description": "Starts and is playable with notable problems (listed in `notes`).",
+          "type": "string",
+          "const": "runs"
+        },
+        {
+          "description": "Playable start to finish with minor issues.",
+          "type": "string",
+          "const": "playable"
+        },
+        {
+          "description": "Indistinguishable from Windows.",
+          "type": "string",
+          "const": "perfect"
+        }
+      ]
+    },
+    "ExeRef": {
+      "description": "The executable that renders the game.",
+      "type": "object",
+      "properties": {
+        "api": {
+          "description": "Primary graphics API, if known (otherwise detected).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GraphicsApi"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bitness": {
+          "description": "Bitness, if known (otherwise detected with `uncork-pe`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bitness"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "geometry_shaders": {
+          "description": "The game uses geometry shaders (rules out DXVK on MoltenVK).",
+          "type": "boolean",
+          "default": false
+        },
+        "path": {
+          "description": "Path relative to the install directory, `/`-separated.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "GraphicsApi": {
+      "description": "A graphics API, detected from imported DLL names.\n\nThe derived order is oldest to newest; [`GameScan::primary_api`] returns the\ngreatest detected value.",
+      "oneOf": [
+        {
+          "description": "`ddraw.dll` (`DirectDraw` / Direct3D 7 and earlier).",
+          "type": "string",
+          "const": "directdraw"
+        },
+        {
+          "description": "`opengl32.dll`.",
+          "type": "string",
+          "const": "opengl"
+        },
+        {
+          "description": "`d3d8.dll`.",
+          "type": "string",
+          "const": "d3d8"
+        },
+        {
+          "description": "`d3d9.dll`.",
+          "type": "string",
+          "const": "d3d9"
+        },
+        {
+          "description": "`d3d10.dll`, `d3d10_1.dll`, `d3d10core.dll`.",
+          "type": "string",
+          "const": "d3d10"
+        },
+        {
+          "description": "`d3d11.dll`.",
+          "type": "string",
+          "const": "d3d11"
+        },
+        {
+          "description": "`d3d12.dll`.",
+          "type": "string",
+          "const": "d3d12"
+        },
+        {
+          "description": "`vulkan-1.dll`.",
+          "type": "string",
+          "const": "vulkan"
+        }
+      ]
+    },
+    "LaunchMode": {
+      "description": "How a Steam game is started.",
+      "oneOf": [
+        {
+          "description": "Make sure Steam runs, then start the game executable directly.",
+          "type": "string",
+          "const": "direct"
+        },
+        {
+          "description": "`steam.exe -applaunch <appid>` (Steam restarted with the game's env).",
+          "type": "string",
+          "const": "applaunch"
+        },
+        {
+          "description": "No Steam involvement (DRM-free or non-Steam games).",
+          "type": "string",
+          "const": "standalone"
+        }
+      ]
+    },
+    "ProfileGraphics": {
+      "description": "Graphics preferences.",
+      "type": "object",
+      "properties": {
+        "backend": {
+          "description": "Preferred backend; `None` lets [`crate::graphics::recommend`] decide.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Backend"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fallbacks": {
+          "description": "Backends to try, in order, if the preferred one is not installed.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Backend"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProfileIni": {
+      "description": "One INI key a profile enforces before each launch.\n\n`file` is a Windows-style path relative to a base: `%APPDATA%\\...`,\n`%LOCALAPPDATA%\\...`, `%USERPROFILE%\\...` (resolved inside the bottle\nfor the prefix's user: the one directory under `drive_c/users` other than\n`Public`), or `%INSTALLDIR%\\...` (the game's install directory). `/` and\n`\\` are both accepted.\n\n`value` may contain the placeholders in [`INI_PLACEHOLDERS`], resolved\nat launch from the main display ([`crate::launch::resolve_ini_value`]).",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "File path with a `%BASE%` prefix.",
+          "type": "string",
+          "pattern": "^%(APPDATA|LOCALAPPDATA|USERPROFILE|INSTALLDIR)%[\\\\/]"
+        },
+        "key": {
+          "description": "Key.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why (shown by `uncork profile show`).",
+          "type": "string",
+          "default": ""
+        },
+        "section": {
+          "description": "Section.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Value; may contain [`INI_PLACEHOLDERS`].",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "section",
+        "key",
+        "value"
+      ]
+    },
+    "ProfileLaunch": {
+      "description": "How to start the game.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Extra arguments passed to the game.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "description": "How to start it; default [`LaunchMode::Direct`] for Steam games and\n[`LaunchMode::Standalone`] otherwise.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LaunchMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProfilePerformance": {
+      "description": "Performance overrides; `None` keeps the bottle's value.",
+      "type": "object",
+      "properties": {
+        "avx": {
+          "description": "Advertise AVX through Rosetta.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "max_fps": {
+          "description": "Frame-rate cap in frames per second, `0` for uncapped; see\n[`crate::bottle::PerformanceConfig::max_fps`].",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        },
+        "metalfx": {
+          "description": "MetalFX upscaling.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "retina": {
+          "description": "Retina mode.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProfileWine": {
+      "description": "Wine settings.",
+      "type": "object",
+      "properties": {
+        "msync": {
+          "description": "Force msync on or off.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "windows_version": {
+          "description": "Windows version the game needs, if not the bottle's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowsVersion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "SteamRef": {
+      "description": "Steam identity of a game.",
+      "type": "object",
+      "properties": {
+        "appid": {
+          "description": "Steam app id (positive).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "appid"
+      ]
+    },
+    "TestReport": {
+      "description": "One hands-on test result.",
+      "type": "object",
+      "properties": {
+        "backend": {
+          "description": "Backend used.",
+          "$ref": "#/$defs/Backend"
+        },
+        "chip": {
+          "description": "Chip, e.g. `M5 Max`.",
+          "type": "string"
+        },
+        "date": {
+          "description": "ISO date, `YYYY-MM-DD`.",
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "macos": {
+          "description": "macOS version, e.g. `27.0.1`.",
+          "type": "string"
+        },
+        "notes": {
+          "description": "Free text: resolution, settings, FPS.",
+          "type": "string",
+          "default": ""
+        },
+        "status": {
+          "description": "Result.",
+          "$ref": "#/$defs/CompatStatus"
+        },
+        "uncork": {
+          "description": "Uncork version or commit.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "date",
+        "uncork",
+        "macos",
+        "chip",
+        "backend",
+        "status"
+      ]
+    },
+    "WindowsVersion": {
+      "description": "The Windows version Wine reports to programs.",
+      "oneOf": [
+        {
+          "description": "Windows 7.",
+          "type": "string",
+          "const": "win7"
+        },
+        {
+          "description": "Windows 8.1.",
+          "type": "string",
+          "const": "win81"
+        },
+        {
+          "description": "Windows 10 (default; what Steam and most games expect).",
+          "type": "string",
+          "const": "win10"
+        },
+        {
+          "description": "Windows 11.",
+          "type": "string",
+          "const": "win11"
+        }
+      ]
+    }
+  }
+}

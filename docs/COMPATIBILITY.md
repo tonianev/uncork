@@ -18,7 +18,7 @@ The overall status is the best of the recent first-hand reports, where recent me
 
 ## Current results
 
-First-hand results so far. Both built-in profiles are `untested`: reaching the main menu does not show that a game is playable, so a status is set only after a session through the checklist below.
+First-hand results so far. Both built-in profiles are `untested`: reaching the main menu does not show that a game is playable, so a status is set only after a session through the checklist below. The `Status` column must equal the profile's `[compat] status`: a unit test in `crates/uncork-core/src/profile.rs` (run by `just profiles-check` and CI) matches each built-in profile to its row by the app id in parentheses and fails when the two differ, or when a built-in Steam game has no row.
 
 | Game | Status | Run on | Verified | Not tested yet |
 |---|---|---|---|---|
@@ -101,17 +101,18 @@ Every field except `notes` is required. `backend` is one of `dxmt`, `d3dmetal`, 
 
 A profile is worth adding when a game needs something Uncork's automatic choice does not give it: a specific backend, an override, an INI setting, a launch mode, or a large-address-aware flag. A game that runs perfectly with the defaults still benefits from a profile, because it carries the compatibility record.
 
-1. Find the executable that renders the game. Steam's launch target is often a launcher; the game is usually the largest `.exe` in the install directory.
-2. Inspect it:
+1. Scaffold it from the installed game:
 
    ```bash
-   uncork inspect "$UNCORK_HOME/bottles/steam/drive_c/Program Files (x86)/Steam/steamapps/common/<Game>/<game>.exe"
+   uncork profile new <appid> --out profiles/<id>.toml     # the app id from `uncork steam games`
+   uncork profile new "/path/to/Game/game.exe" --out profiles/<id>.toml   # a game that is not on Steam
    ```
 
-   This prints the bitness, the graphics APIs found in the executable and the DLLs beside it (with evidence), the large-address-aware and NX flags, Steamworks and anti-cheat files, and the backend Uncork would choose.
-3. Create `profiles/<id>.toml`, where `<id>` is the game's name in kebab-case. Start from the fields [profiles/README.md](../profiles/README.md) describes; set only what differs from the defaults, and comment why, with a source where one exists.
-4. Test it as a user profile before opening a PR: copy it to `$UNCORK_HOME/profiles/`, then run `uncork profile show <id>` and `uncork play <id> --dry-run`, then play.
-5. Run `cargo test -p uncork-core`; the tests validate every built-in profile.
-6. Open a PR with the profile, set `status` from your own test, and add your report as the first `[[compat.reports]]` entry.
+   The file gets the facts `uncork inspect` reports (bitness, graphics API with its evidence, the large-address-aware and NX flags, Steamworks and anti-cheat files) as a header comment, `[exe] path` set to the executable `uncork play` would start, the recommended backend with its reason, and commented examples of the optional tables. The id defaults to the game's name in kebab-case; `--id` sets it. Steam's launch target is often a launcher and the renderer another `.exe`; check `[exe] path`.
+2. Edit it: keep only what the game needs, and comment why, with a source where one exists ([profiles/README.md](../profiles/README.md) describes every field; `profiles/schema.json` lets an editor check the file as you type).
+3. Check it: `uncork profile validate profiles/<id>.toml` reports every rule the file breaks with its line.
+4. Test it as a user profile before opening a PR: copy it to `$UNCORK_HOME/profiles/`, then run `uncork profile show <id>` and `uncork play <id> --dry-run`, then play through the checklist above.
+5. Set `status` from your own test, add your report as the first `[[compat.reports]]` entry, and add the game's row to [Current results](#current-results) with the same status. `just profiles-check` validates every built-in profile and fails when a profile's status and its row differ.
+6. Open a PR with the profile.
 
 Anti-cheat: games with kernel-level anti-cheat do not run under Wine. `uncork inspect` reports the anti-cheat files it finds (Easy Anti-Cheat, BattlEye, Vanguard). Such a game can still get a profile marked `broken`, so nobody spends an evening on it.

@@ -53,7 +53,19 @@ use crate::component::{ComponentKind, InstalledComponent};
 use crate::wine::WineRuntime;
 
 /// A Direct3D translation layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
     /// Apple D3DMetal (Game Porting Toolkit).

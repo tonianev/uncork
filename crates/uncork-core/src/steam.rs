@@ -90,7 +90,9 @@ use crate::profile::GameProfile;
 use crate::wine::WineRuntime;
 
 /// How a Steam game is started.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum LaunchMode {
     /// Make sure Steam runs, then start the game executable directly.
@@ -1262,7 +1264,7 @@ pub fn plan_game(
     args: &[String],
     options: &LaunchOptions,
 ) -> crate::Result<LaunchPlan> {
-    let app = find_game(ctx.bottle, appid)?;
+    let app = installed_game(ctx.bottle, appid)?;
     plan_found_game(ctx, &app, args, options)
 }
 
@@ -1316,8 +1318,15 @@ fn find_steam(bottle: &Bottle) -> crate::Result<SteamInstall> {
     })
 }
 
-/// The installed app `appid` in `bottle`'s Steam libraries.
-fn find_game(bottle: &Bottle, appid: u32) -> crate::Result<InstalledApp> {
+/// The installed app `appid` in `bottle`'s Steam libraries: what
+/// [`plan_game`] starts from, and what `uncork profile new <appid>`
+/// scaffolds from.
+///
+/// # Errors
+/// [`crate::Error::NotFound`] when Steam is not installed in the bottle
+/// (the hint names `uncork steam install`) or the app is not in its
+/// libraries; [`crate::Error::Steam`] when a library file cannot be read.
+pub fn installed_game(bottle: &Bottle, appid: u32) -> crate::Result<InstalledApp> {
     let steam = find_steam(bottle)?;
     steam.find_app(appid)?.ok_or_else(|| Error::NotFound {
         what: "Steam app",
@@ -1329,8 +1338,18 @@ fn find_game(bottle: &Bottle, appid: u32) -> crate::Result<InstalledApp> {
     })
 }
 
-/// The executable to start for `app` (see [`plan_game`]).
-fn game_exe(app: &InstalledApp, profile: Option<&GameProfile>) -> crate::Result<PathBuf> {
+/// The executable to start for `app` (see [`plan_game`]): `profile`'s
+/// `exe.path` under the install directory, matched ignoring letter case,
+/// when a profile names it; without a profile, the largest `*.exe` at the
+/// shallowest level of the install directory that has one, ties broken by
+/// path, skipping the names Steam's redistributable installers and crash
+/// reporters use ([`uncork_steam::client::NON_GAME_EXE_PREFIXES`]) and
+/// looking at most three directories down (`EXE_SEARCH_DEPTH`).
+///
+/// # Errors
+/// [`crate::Error::NotFound`] when the profile's executable is not in the
+/// install directory, or no plausible executable is.
+pub fn game_exe(app: &InstalledApp, profile: Option<&GameProfile>) -> crate::Result<PathBuf> {
     if let Some(profile) = profile {
         let parts: Vec<&str> = profile
             .exe
@@ -1547,7 +1566,7 @@ fn play_with(
     confirm_restart: &mut ConfirmRestart<'_>,
     dry_run: bool,
 ) -> crate::Result<PlayOutcome> {
-    let app = find_game(bottle, request.appid)?;
+    let app = installed_game(bottle, request.appid)?;
     let ctx = PlanContext {
         layout,
         bottle,

@@ -27,10 +27,17 @@
 //! status = "untested"
 //! notes = "..."
 //! ```
+//!
+//! [`validate_text`] checks a file the way `uncork profile validate` does:
+//! the parse, then [`GameProfile::problems`], with the line of each
+//! problem. [`schema`] is the JSON schema of the format, checked in as
+//! `profiles/schema.json` for editors.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uncork_pe::{Bitness, GraphicsApi};
 
@@ -40,15 +47,16 @@ use crate::paths::Layout;
 use crate::steam::LaunchMode;
 
 /// Steam identity of a game.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SteamRef {
-    /// Steam app id.
+    /// Steam app id (positive).
+    #[schemars(range(min = 1))]
     pub appid: u32,
 }
 
 /// The executable that renders the game.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExeRef {
     /// Path relative to the install directory, `/`-separated.
@@ -65,7 +73,7 @@ pub struct ExeRef {
 }
 
 /// Graphics preferences.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileGraphics {
     /// Preferred backend; `None` lets [`crate::graphics::recommend`] decide.
@@ -77,7 +85,7 @@ pub struct ProfileGraphics {
 }
 
 /// Wine settings.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileWine {
     /// Windows version the game needs, if not the bottle's.
@@ -89,7 +97,7 @@ pub struct ProfileWine {
 }
 
 /// Performance overrides; `None` keeps the bottle's value.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProfilePerformance {
     /// Retina mode.
@@ -108,7 +116,7 @@ pub struct ProfilePerformance {
 }
 
 /// How to start the game.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileLaunch {
     /// Extra arguments passed to the game.
@@ -130,10 +138,11 @@ pub struct ProfileLaunch {
 ///
 /// `value` may contain the placeholders in [`INI_PLACEHOLDERS`], resolved
 /// at launch from the main display ([`crate::launch::resolve_ini_value`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileIni {
     /// File path with a `%BASE%` prefix.
+    #[schemars(regex(pattern = INI_FILE_PATTERN))]
     pub file: String,
     /// Section.
     pub section: String,
@@ -147,7 +156,9 @@ pub struct ProfileIni {
 }
 
 /// How well the game runs. Ordered worst to best.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum CompatStatus {
     /// Nobody has reported a result with Uncork yet.
@@ -163,11 +174,41 @@ pub enum CompatStatus {
     Perfect,
 }
 
+impl CompatStatus {
+    /// Every level, worst to best.
+    pub const ALL: [CompatStatus; 5] = [
+        CompatStatus::Untested,
+        CompatStatus::Broken,
+        CompatStatus::Runs,
+        CompatStatus::Playable,
+        CompatStatus::Perfect,
+    ];
+
+    /// The lowercase name used in TOML and `docs/COMPATIBILITY.md`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CompatStatus::Untested => "untested",
+            CompatStatus::Broken => "broken",
+            CompatStatus::Runs => "runs",
+            CompatStatus::Playable => "playable",
+            CompatStatus::Perfect => "perfect",
+        }
+    }
+}
+
+impl fmt::Display for CompatStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One hands-on test result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TestReport {
     /// ISO date, `YYYY-MM-DD`.
+    #[schemars(regex(pattern = DATE_PATTERN))]
     pub date: String,
     /// Uncork version or commit.
     pub uncork: String,
@@ -185,7 +226,7 @@ pub struct TestReport {
 }
 
 /// Compatibility information.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Compat {
     /// Overall status (the best recent report).
@@ -200,14 +241,24 @@ pub struct Compat {
 }
 
 /// A game profile.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The `schemars` attributes repeat the rules of [`GameProfile::problems`]
+/// that JSON Schema can express, so an editor shows them while typing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(
+    title = "Uncork game profile",
+    description = "One game's settings for Uncork: profiles/<id>.toml in the repository, or $UNCORK_HOME/profiles/<id>.toml. The format is documented in profiles/README.md."
+)]
 pub struct GameProfile {
     /// Schema version, currently 1.
+    #[schemars(range(min = 1, max = 1))]
     pub schema: u32,
     /// Kebab-case id; equals the file stem.
+    #[schemars(regex(pattern = KEBAB_ID_PATTERN), length(max = 64))]
     pub id: String,
     /// Display name.
+    #[schemars(length(min = 1))]
     pub name: String,
     /// Steam identity, if the game is on Steam.
     #[serde(default)]
@@ -225,9 +276,11 @@ pub struct GameProfile {
     pub performance: ProfilePerformance,
     /// Extra environment variables.
     #[serde(default)]
+    #[schemars(extend("propertyNames" = { "pattern": ENV_NAME_PATTERN }))]
     pub env: BTreeMap<String, String>,
     /// Extra DLL overrides.
     #[serde(default)]
+    #[schemars(extend("additionalProperties" = { "type": "string", "enum": OVERRIDE_VALUES }))]
     pub dll_overrides: BTreeMap<String, String>,
     /// Launch settings.
     #[serde(default)]
@@ -255,40 +308,66 @@ impl GameProfile {
 
     /// Problems that make a profile unusable: schema != 1; id not
     /// kebab-case (`^[a-z0-9]+(-[a-z0-9]+)*$`, ≤ 64 chars); empty name;
-    /// `exe.path` empty, absolute, containing `\` or `..`; env keys not
-    /// `^[A-Za-z_][A-Za-z0-9_]*$`; DLL override values not one of `n`, `b`,
-    /// `n,b`, `b,n`, `d` or empty (disabled); the preferred backend
-    /// repeated in `fallbacks`; a backend that cannot run the declared
-    /// `bitness`+`api` ([`crate::graphics::supports`]); DXVK listed while
-    /// `geometry_shaders` is true; `mode = "direct"`/`"applaunch"` without
-    /// `[steam]`; an `ini.file` without a known `%BASE%` prefix or with `..`;
-    /// an `ini.value` with a `{...}` token that is not one of
-    /// [`INI_PLACEHOLDERS`]. Empty when valid.
+    /// `steam.appid` 0; `exe.path` empty, absolute, containing `\` or `..`;
+    /// env keys not `^[A-Za-z_][A-Za-z0-9_]*$`; DLL override values not one
+    /// of `n`, `b`, `n,b`, `b,n`, `d` or empty (disabled); the preferred
+    /// backend repeated in `fallbacks`; a backend that cannot run the
+    /// declared `bitness`+`api` ([`crate::graphics::supports`]); DXVK listed
+    /// while `geometry_shaders` is true; `mode = "direct"`/`"applaunch"`
+    /// without `[steam]`; an `ini.file` without a known `%BASE%` prefix or
+    /// with `..`; an empty `ini.section` or `ini.key`; an `ini.value` with a
+    /// `{...}` token that is not one of [`INI_PLACEHOLDERS`]; `compat.notes`
+    /// empty while `compat.status` is not `untested` (a result needs what
+    /// players should know); a report `date` that is not `YYYY-MM-DD`.
+    /// Empty when valid. Each problem names its key; [`validate_text`] adds
+    /// the line.
     #[must_use]
-    pub fn problems(&self) -> Vec<String> {
+    pub fn problems(&self) -> Vec<Problem> {
         let mut problems = Vec::new();
         if self.schema != 1 {
-            problems.push(format!("schema is {}, expected 1", self.schema));
+            problems.push(Problem::at(
+                "schema",
+                format!("schema is {}, expected 1", self.schema),
+            ));
         }
         if !is_kebab_id(&self.id) {
-            problems.push(format!(
-                "id {:?} is not kebab-case (lowercase letters and digits joined by '-', at most {MAX_ID_LEN} characters)",
-                self.id
+            problems.push(Problem::at(
+                "id",
+                format!(
+                    "id {:?} is not kebab-case (lowercase letters and digits joined by '-', at most {MAX_ID_LEN} characters)",
+                    self.id
+                ),
             ));
         }
         if self.name.trim().is_empty() {
-            problems.push("name is empty".to_owned());
+            problems.push(Problem::at("name", "name is empty".to_owned()));
+        }
+        if self.steam.as_ref().is_some_and(|steam| steam.appid == 0) {
+            problems.push(Problem::at(
+                "steam.appid",
+                "steam.appid is 0; Steam app ids are positive (`uncork steam games` shows them)"
+                    .to_owned(),
+            ));
         }
         if let Some(why) = exe_path_problem(&self.exe.path) {
-            problems.push(format!("exe.path {:?} {why}", self.exe.path));
+            problems.push(Problem::at(
+                "exe.path",
+                format!("exe.path {:?} {why}", self.exe.path),
+            ));
         }
         for key in self.env.keys().filter(|key| !is_env_name(key)) {
-            problems.push(format!("env key {key:?} is not a valid variable name"));
+            problems.push(Problem::at(
+                format!("env.{key}"),
+                format!("env key {key:?} is not a valid variable name"),
+            ));
         }
         for (dll, value) in &self.dll_overrides {
             if !OVERRIDE_VALUES.contains(&value.as_str()) {
-                problems.push(format!(
-                    "dll_overrides.{dll} = {value:?} is not one of \"n\", \"b\", \"n,b\", \"b,n\", \"d\" or \"\""
+                problems.push(Problem::at(
+                    format!("dll_overrides.{dll}"),
+                    format!(
+                        "dll_overrides.{dll} = {value:?} is not one of \"n\", \"b\", \"n,b\", \"b,n\", \"d\" or \"\""
+                    ),
                 ));
             }
         }
@@ -301,50 +380,94 @@ impl GameProfile {
             } else {
                 "applaunch"
             };
-            problems.push(format!("launch.mode = {mode:?} needs a [steam] section"));
+            problems.push(Problem::at(
+                "launch.mode",
+                format!("launch.mode = {mode:?} needs a [steam] section"),
+            ));
         }
-        for ini in &self.ini {
+        for (index, ini) in self.ini.iter().enumerate() {
+            let key = |field: &str| format!("ini[{index}].{field}");
             if let Some(why) = ini_file_problem(&ini.file) {
-                problems.push(format!("ini.file {:?} {why}", ini.file));
+                problems.push(Problem::at(
+                    key("file"),
+                    format!("ini.file {:?} {why}", ini.file),
+                ));
+            }
+            for (field, value) in [("section", &ini.section), ("key", &ini.key)] {
+                if value.trim().is_empty() {
+                    problems.push(Problem::at(key(field), format!("ini.{field} is empty")));
+                }
             }
             for token in placeholders(&ini.value) {
                 if !INI_PLACEHOLDERS.contains(&token) {
-                    problems.push(format!(
-                        "ini.value {:?} has an unknown placeholder {{{token}}}; known: {}",
-                        ini.value,
-                        INI_PLACEHOLDERS
-                            .map(|known| format!("{{{known}}}"))
-                            .join(", ")
+                    problems.push(Problem::at(
+                        key("value"),
+                        format!(
+                            "ini.value {:?} has an unknown placeholder {{{token}}}; known: {}",
+                            ini.value,
+                            INI_PLACEHOLDERS
+                                .map(|known| format!("{{{known}}}"))
+                                .join(", ")
+                        ),
                     ));
                 }
+            }
+        }
+        if self.compat.status != CompatStatus::Untested && self.compat.notes.trim().is_empty() {
+            problems.push(Problem::at(
+                "compat.notes",
+                format!(
+                    "compat.notes is empty while compat.status is {:?}; say what players should know (docs/COMPATIBILITY.md)",
+                    self.compat.status.as_str()
+                ),
+            ));
+        }
+        for (index, report) in self.compat.reports.iter().enumerate() {
+            if !is_iso_date(&report.date) {
+                problems.push(Problem::at(
+                    format!("compat.reports[{index}].date"),
+                    format!("compat.reports date {:?} is not YYYY-MM-DD", report.date),
+                ));
             }
         }
         problems
     }
 
     /// The `[graphics]` rules of [`GameProfile::problems`].
-    fn graphics_problems(&self) -> Vec<String> {
+    fn graphics_problems(&self) -> Vec<Problem> {
         let mut problems = Vec::new();
         let graphics = &self.graphics;
         if let Some(preferred) = graphics.backend
             && graphics.fallbacks.contains(&preferred)
         {
-            problems.push(format!(
-                "graphics.fallbacks repeats the preferred backend {preferred}"
+            problems.push(Problem::at(
+                "graphics.fallbacks",
+                format!("graphics.fallbacks repeats the preferred backend {preferred}"),
             ));
         }
 
-        let mut listed: Vec<Backend> = Vec::new();
-        for backend in graphics.backend.iter().chain(&graphics.fallbacks) {
-            if !listed.contains(backend) {
-                listed.push(*backend);
+        // Each backend with the key it was listed under, without repeats.
+        let mut listed: Vec<(Backend, &str)> = Vec::new();
+        for (backend, key) in graphics
+            .backend
+            .iter()
+            .map(|backend| (backend, "graphics.backend"))
+            .chain(
+                graphics
+                    .fallbacks
+                    .iter()
+                    .map(|backend| (backend, "graphics.fallbacks")),
+            )
+        {
+            if !listed.iter().any(|(known, _)| known == backend) {
+                listed.push((*backend, key));
             }
         }
         let bitnesses = match self.exe.bitness {
             Some(bitness) => vec![bitness],
             None => vec![Bitness::X86, Bitness::X64],
         };
-        for backend in listed {
+        for (backend, key) in listed {
             if let Some(api) = self.exe.api
                 && !bitnesses
                     .iter()
@@ -354,13 +477,17 @@ impl GameProfile {
                     Some(bitness) => crate::graphics::describe_program(Some(api), bitness),
                     None => crate::graphics::api_name(api).to_owned(),
                 };
-                problems.push(format!("graphics backend {backend} cannot run {program}"));
+                problems.push(Problem::at(
+                    key,
+                    format!("graphics backend {backend} cannot run {program}"),
+                ));
             }
             if backend == Backend::Dxvk && self.exe.geometry_shaders {
-                problems.push(
+                problems.push(Problem::at(
+                    key,
                     "graphics backend dxvk cannot run games that need geometry shaders (exe.geometry_shaders)"
                         .to_owned(),
-                );
+                ));
             }
         }
         problems
@@ -377,8 +504,225 @@ impl GameProfile {
     }
 }
 
+/// One rule a profile breaks ([`GameProfile::problems`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Problem {
+    /// The 1-based line of the key, or of a parse error, when the file can
+    /// place it ([`validate_text`] fills it in; [`GameProfile::problems`]
+    /// leaves it `None`).
+    pub line: Option<usize>,
+    /// The TOML key path the problem is about: `exe.path`, `ini[1].value`,
+    /// `env.NAME`, `compat.reports[0].date`; empty for a parse error or the
+    /// file as a whole.
+    pub key: String,
+    /// What is wrong, in one line that names the key and the value.
+    pub message: String,
+}
+
+impl Problem {
+    /// A problem at `key` with no line yet.
+    fn at(key: impl Into<String>, message: String) -> Problem {
+        Problem {
+            line: None,
+            key: key.into(),
+            message,
+        }
+    }
+}
+
+impl fmt::Display for Problem {
+    /// `line N: message`, or the message alone without a line.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.line {
+            Some(line) => write!(f, "line {line}: {}", self.message),
+            None => f.write_str(&self.message),
+        }
+    }
+}
+
+/// What [`validate_text`] found in one file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Validation {
+    /// The file.
+    pub path: PathBuf,
+    /// Its `id`, when it parsed.
+    pub id: Option<String>,
+    /// Every problem, parse errors first; empty when the file is a valid
+    /// profile whose id matches its name.
+    pub problems: Vec<Problem>,
+}
+
+impl Validation {
+    /// No problems.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.problems.is_empty()
+    }
+}
+
+/// Check `text` as the profile file `path`: the parse (one problem with
+/// the line of the error), then [`GameProfile::problems`] plus the rule
+/// that `id` equals the file name without `.toml`, each problem with the
+/// line its key is on.
+#[must_use]
+pub fn validate_text(text: &str, path: &Path) -> Validation {
+    let (profile, problems) = check_text(text, path);
+    Validation {
+        path: path.to_path_buf(),
+        id: profile.map(|profile| profile.id),
+        problems,
+    }
+}
+
+/// Read and [`validate_text`] one file.
+///
+/// # Errors
+/// [`crate::Error::Io`] when the file cannot be read.
+pub fn validate_file(path: &Path) -> crate::Result<Validation> {
+    let text =
+        std::fs::read_to_string(path).map_err(|err| crate::Error::io("cannot read", path, err))?;
+    Ok(validate_text(&text, path))
+}
+
+/// [`validate_file`] for each of `paths`: a file as given, a directory as
+/// every `*.toml` in it (sorted; hidden files skipped), in the order given.
+///
+/// # Errors
+/// [`crate::Error::Io`] when a path does not exist or cannot be read;
+/// [`crate::Error::NotFound`] for a directory without any `.toml` file.
+pub fn validate_paths(paths: &[PathBuf]) -> crate::Result<Vec<Validation>> {
+    let mut validations = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            let files = user_profile_files(path)?;
+            if files.is_empty() {
+                return Err(crate::Error::NotFound {
+                    what: "profile",
+                    name: path.display().to_string(),
+                    hint: "; the directory has no .toml file".to_owned(),
+                });
+            }
+            for file in files {
+                validations.push(validate_file(&file)?);
+            }
+        } else {
+            validations.push(validate_file(path)?);
+        }
+    }
+    Ok(validations)
+}
+
+/// The parsed profile (when the text parses) and every problem with its
+/// line: [`validate_text`] without the wrapper.
+fn check_text(text: &str, path: &Path) -> (Option<GameProfile>, Vec<Problem>) {
+    let profile: GameProfile = match toml::from_str(text) {
+        Ok(profile) => profile,
+        Err(err) => {
+            let problem = Problem {
+                line: err.span().map(|span| line_at(text, span.start)),
+                key: String::new(),
+                message: err.message().trim_end().to_owned(),
+            };
+            return (None, vec![problem]);
+        }
+    };
+    let mut problems = profile.problems();
+    if path.file_stem().and_then(|stem| stem.to_str()) != Some(profile.id.as_str()) {
+        problems.push(Problem::at(
+            "id",
+            format!("id {:?} does not match the file name", profile.id),
+        ));
+    }
+    for problem in &mut problems {
+        problem.line = line_of(text, &problem.key);
+    }
+    (Some(profile), problems)
+}
+
+/// The 1-based line of byte `offset` in `text`.
+fn line_at(text: &str, offset: usize) -> usize {
+    text.as_bytes()
+        .get(..offset)
+        .map_or(0, |before| before.iter().filter(|&&b| b == b'\n').count())
+        + 1
+}
+
+/// The 1-based line on which `key` (`exe.path`, `ini[1].value`,
+/// `env.NAME`, `compat.reports[0].date`) is defined in `text`: the line of
+/// its value, or of the table or array element header for a key that names
+/// one. A key the text does not define gets the line of the longest prefix
+/// it does define (a missing `compat.notes` points at `[compat]`). `None`
+/// for an empty key, a key whose first part is absent, or text that does
+/// not parse. `env` and `dll_overrides` hold user-chosen names that may
+/// contain dots, so everything after their dot is one key.
+fn line_of(text: &str, key: &str) -> Option<usize> {
+    if key.is_empty() {
+        return None;
+    }
+    let segments: Vec<&str> = match key.split_once('.') {
+        Some((table @ ("env" | "dll_overrides"), name)) => vec![table, name],
+        _ => key.split('.').collect(),
+    };
+    let root = toml::de::DeValue::Table(toml::de::DeTable::parse(text).ok()?.into_inner());
+    let mut node = &root;
+    let mut start = None;
+    'walk: for segment in segments {
+        let (name, index) = match segment.strip_suffix(']').and_then(|s| s.split_once('[')) {
+            Some((name, index)) => (name, index.parse::<usize>().ok()),
+            None => (segment, None),
+        };
+        let Some(value) = node.get(name) else {
+            break;
+        };
+        start = Some(value.span().start);
+        node = value.get_ref();
+        if let Some(index) = index {
+            let Some(element) = node.get(index) else {
+                break 'walk;
+            };
+            start = Some(element.span().start);
+            node = element.get_ref();
+        }
+    }
+    start.map(|offset| line_at(text, offset))
+}
+
+/// The JSON schema of the profile format, derived from [`GameProfile`]
+/// (`uncork profile schema`; checked in as `profiles/schema.json`).
+#[must_use]
+pub fn schema() -> schemars::Schema {
+    schemars::schema_for!(GameProfile)
+}
+
+/// [`schema`] as the text of `profiles/schema.json`: pretty-printed JSON
+/// ending in a newline.
+#[must_use]
+pub fn schema_json() -> String {
+    // A schemars `Schema` is a JSON object, so serializing it cannot fail.
+    let mut text = serde_json::to_string_pretty(&schema()).expect("a Schema serializes as JSON");
+    text.push('\n');
+    text
+}
+
 /// Longest profile id [`GameProfile::problems`] accepts.
 const MAX_ID_LEN: usize = 64;
+
+/// `id` as a regular expression, for the JSON schema (`is_kebab_id` is
+/// the check).
+pub const KEBAB_ID_PATTERN: &str = "^[a-z0-9]+(-[a-z0-9]+)*$";
+
+/// An `[env]` name as a regular expression, for the JSON schema
+/// (`is_env_name` is the check).
+pub const ENV_NAME_PATTERN: &str = "^[A-Za-z_][A-Za-z0-9_]*$";
+
+/// An `ini.file` as a regular expression, for the JSON schema
+/// ([`ini_file_problem`] is the check): a base from [`INI_BASES`] and a
+/// separator.
+const INI_FILE_PATTERN: &str = r"^%(APPDATA|LOCALAPPDATA|USERPROFILE|INSTALLDIR)%[\\/]";
+
+/// A report `date` as a regular expression, for the JSON schema
+/// ([`is_iso_date`] is the check).
+const DATE_PATTERN: &str = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$";
 
 /// Values Wine accepts in `WINEDLLOVERRIDES` (empty = disabled).
 const OVERRIDE_VALUES: [&str; 6] = ["n", "b", "n,b", "b,n", "d", ""];
@@ -395,6 +739,19 @@ const INI_BASES: [&str; 4] = [
 /// the main display's "looks like" width and height in points and its
 /// refresh rate in whole Hz ([`crate::launch::resolve_ini_value`]).
 pub const INI_PLACEHOLDERS: [&str; 3] = ["display.width", "display.height", "display.refresh"];
+
+/// `YYYY-MM-DD` with digits in every position (the calendar is not checked).
+fn is_iso_date(date: &str) -> bool {
+    let bytes = date.as_bytes();
+    bytes.len() == 10
+        && bytes.iter().enumerate().all(|(i, &b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
+}
 
 /// The `{...}` tokens of `value`, without braces (a `{` with no `}` after
 /// it is plain text).
@@ -546,23 +903,22 @@ fn user_profile_files(dir: &Path) -> crate::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Read, parse and check one user profile, whose id must match its file name.
+/// Read, parse and check one user profile ([`validate_text`]), whose id
+/// must match its file name.
 fn load_user_profile(path: &Path) -> crate::Result<GameProfile> {
     let text =
         std::fs::read_to_string(path).map_err(|err| crate::Error::io("cannot read", path, err))?;
-    let profile = GameProfile::parse(&text, path)?;
-    let mut problems = profile.problems();
-    if path.file_stem().and_then(|stem| stem.to_str()) != Some(profile.id.as_str()) {
-        problems.push(format!("id {:?} does not match the file name", profile.id));
-    }
-    if problems.is_empty() {
-        Ok(profile)
-    } else {
-        Err(crate::Error::Config {
+    match check_text(&text, path) {
+        (Some(profile), problems) if problems.is_empty() => Ok(profile),
+        (_, problems) => Err(crate::Error::Config {
             what: "profile",
             path: path.to_path_buf(),
-            message: problems.join("; "),
-        })
+            message: problems
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
+        }),
     }
 }
 
@@ -738,6 +1094,7 @@ key = "Fullscreen"
 value = "0"
 [compat]
 status = "playable"
+notes = "The launcher misdraws once."
 [[compat.reports]]
 date = "2026-10-01"
 uncork = "0.1.0"
@@ -793,10 +1150,26 @@ status = "playable"
 
     // ----- problems -----
 
+    /// The messages of the problems `change` introduces into [`minimal`].
     fn problems_after(change: impl FnOnce(&mut GameProfile)) -> Vec<String> {
         let mut profile = minimal();
         change(&mut profile);
-        profile.problems()
+        profile
+            .problems()
+            .into_iter()
+            .map(|problem| problem.message)
+            .collect()
+    }
+
+    /// Like [`problems_after`], with the key of each problem.
+    fn keyed_problems_after(change: impl FnOnce(&mut GameProfile)) -> Vec<(String, String)> {
+        let mut profile = minimal();
+        change(&mut profile);
+        profile
+            .problems()
+            .into_iter()
+            .map(|problem| (problem.key, problem.message))
+            .collect()
     }
 
     fn assert_one_problem(change: impl FnOnce(&mut GameProfile), expected: &str) {
@@ -1060,6 +1433,404 @@ status = "playable"
             p.exe.path = String::new();
         });
         assert_eq!(problems.len(), 4, "{problems:?}");
+    }
+
+    #[test]
+    fn steam_app_ids_are_positive() {
+        assert_one_problem(
+            |p| p.steam = Some(SteamRef { appid: 0 }),
+            "steam.appid is 0",
+        );
+        assert!(problems_after(|p| p.steam = Some(SteamRef { appid: 1 })).is_empty());
+    }
+
+    #[test]
+    fn ini_sections_and_keys_are_not_empty() {
+        let mut entry = ini(r"%APPDATA%\Game\game.ini");
+        entry.section = " ".to_owned();
+        entry.key = String::new();
+        let problems = keyed_problems_after(|p| p.ini.push(entry));
+        assert_eq!(
+            problems,
+            [
+                (
+                    "ini[0].section".to_owned(),
+                    "ini.section is empty".to_owned()
+                ),
+                ("ini[0].key".to_owned(), "ini.key is empty".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tested_status_needs_notes() {
+        for status in CompatStatus::ALL {
+            if status == CompatStatus::Untested {
+                assert!(problems_after(|p| p.compat.status = status).is_empty());
+            } else {
+                assert_one_problem(|p| p.compat.status = status, "compat.notes is empty");
+            }
+        }
+        let with_notes = problems_after(|p| {
+            p.compat.status = CompatStatus::Runs;
+            p.compat.notes = "Videos stall; skip them.".to_owned();
+        });
+        assert!(with_notes.is_empty(), "{with_notes:?}");
+    }
+
+    fn report(date: &str) -> TestReport {
+        TestReport {
+            date: date.to_owned(),
+            uncork: "0.1.0".to_owned(),
+            macos: "27.0.1".to_owned(),
+            chip: "M5 Max".to_owned(),
+            backend: Backend::Dxmt,
+            status: CompatStatus::Runs,
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn report_dates_are_iso() {
+        for date in ["2026-10-28", "0000-00-00"] {
+            let problems = problems_after(|p| p.compat.reports.push(report(date)));
+            assert!(problems.is_empty(), "{date}: {problems:?}");
+        }
+        for date in [
+            "2026-1-5",
+            "28.10.2026",
+            "2026/10/28",
+            "",
+            "2026-10-28T10:00",
+        ] {
+            let problems = keyed_problems_after(|p| p.compat.reports.push(report(date)));
+            assert_eq!(problems.len(), 1, "{date}: {problems:?}");
+            assert_eq!(problems[0].0, "compat.reports[0].date", "{date}");
+            assert!(problems[0].1.contains("YYYY-MM-DD"), "{date}: {problems:?}");
+        }
+    }
+
+    #[test]
+    fn problems_name_their_keys() {
+        let keys: Vec<String> = keyed_problems_after(|p| {
+            p.schema = 0;
+            p.id = "Bad".to_owned();
+            p.name = String::new();
+            p.exe.path = String::new();
+            p.env.insert("A B".to_owned(), "1".to_owned());
+            p.dll_overrides.insert("d3d9".to_owned(), "x".to_owned());
+            p.graphics.backend = Some(Backend::Dxmt);
+            p.graphics.fallbacks = vec![Backend::Dxmt];
+            p.launch.mode = Some(LaunchMode::Direct);
+            p.ini.push(ini("game.ini"));
+        })
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+        assert_eq!(
+            keys,
+            [
+                "schema",
+                "id",
+                "name",
+                "exe.path",
+                "env.A B",
+                "dll_overrides.d3d9",
+                "graphics.fallbacks",
+                "launch.mode",
+                "ini[0].file",
+            ]
+        );
+    }
+
+    #[test]
+    fn graphics_problems_name_the_list_the_backend_is_in() {
+        let keys = |fallback: bool| {
+            keyed_problems_after(|p| {
+                p.exe.bitness = Some(Bitness::X86);
+                p.exe.api = Some(GraphicsApi::D3d11);
+                if fallback {
+                    p.graphics.fallbacks = vec![Backend::D3dmetal];
+                } else {
+                    p.graphics.backend = Some(Backend::D3dmetal);
+                }
+            })
+        };
+        assert_eq!(keys(false)[0].0, "graphics.backend");
+        assert_eq!(keys(true)[0].0, "graphics.fallbacks");
+    }
+
+    // ----- validate -----
+
+    #[test]
+    fn validate_text_places_problems_on_their_lines() {
+        let text = "schema = 1\nid = \"x\"\nname = \"X\"\n\n[steam]\nappid = 0\n\n[exe]\npath = \"../x.exe\"\n\n[env]\n\"A B\" = \"1\"\n\n[[ini]]\nfile = 'game.ini'\nsection = \"S\"\nkey = \"K\"\nvalue = \"{nope}\"\n\n[[ini]]\nfile = '%APPDATA%\\g.ini'\nsection = \"S\"\nkey = \"K\"\nvalue = \"1\"\n\n[[compat.reports]]\ndate = \"today\"\nuncork = \"0.1.0\"\nmacos = \"27\"\nchip = \"M5\"\nbackend = \"dxmt\"\nstatus = \"runs\"\n";
+        let validation = validate_text(text, Path::new("/p/y.toml"));
+        assert_eq!(validation.id.as_deref(), Some("x"));
+        assert_eq!(validation.path, Path::new("/p/y.toml"));
+        let located: Vec<(Option<usize>, &str)> = validation
+            .problems
+            .iter()
+            .map(|p| (p.line, p.key.as_str()))
+            .collect();
+        assert_eq!(
+            located,
+            [
+                (Some(6), "steam.appid"),
+                (Some(9), "exe.path"),
+                (Some(12), "env.A B"),
+                (Some(15), "ini[0].file"),
+                (Some(18), "ini[0].value"),
+                (Some(27), "compat.reports[0].date"),
+                (Some(2), "id"),
+            ]
+        );
+        assert!(
+            validation.problems[0]
+                .to_string()
+                .starts_with("line 6: steam.appid is 0"),
+            "{}",
+            validation.problems[0]
+        );
+        assert_eq!(
+            validation.problems[6].to_string(),
+            "line 2: id \"x\" does not match the file name"
+        );
+        assert!(!validation.is_valid());
+    }
+
+    #[test]
+    fn validate_text_reports_a_parse_error_with_its_line() {
+        let validation = validate_text("schema = 1\nid = \"x\"\nname = 3\n", Path::new("x.toml"));
+        assert_eq!(validation.id, None);
+        assert_eq!(validation.problems.len(), 1, "{:?}", validation.problems);
+        let problem = &validation.problems[0];
+        assert_eq!((problem.line, problem.key.as_str()), (Some(3), ""));
+        assert!(problem.message.contains("invalid type"), "{problem}");
+        let unknown = validate_text(
+            "schema = 1\nid = \"x\"\nname = \"X\"\n[exe]\npath = \"x.exe\"\nbits = 32\n",
+            Path::new("x.toml"),
+        );
+        assert_eq!(unknown.problems[0].line, Some(6), "{:?}", unknown.problems);
+        assert!(
+            unknown.problems[0].message.contains("unknown field `bits`"),
+            "{:?}",
+            unknown.problems
+        );
+    }
+
+    #[test]
+    fn line_of_follows_tables_arrays_and_user_named_keys() {
+        let text = "schema = 1\n[exe]\npath = \"x\"\n[dll_overrides]\n\"a.b\" = \"n\"\n[[ini]]\nfile = \"f\"\n[[ini]]\nfile = \"g\"\n";
+        assert_eq!(line_of(text, "schema"), Some(1));
+        assert_eq!(line_of(text, "exe"), Some(2));
+        assert_eq!(line_of(text, "exe.path"), Some(3));
+        assert_eq!(line_of(text, "dll_overrides.a.b"), Some(5));
+        assert_eq!(line_of(text, "ini[1]"), Some(8));
+        assert_eq!(line_of(text, "ini[1].file"), Some(9));
+        assert_eq!(
+            line_of(text, "exe.missing"),
+            Some(2),
+            "a missing key points at its table"
+        );
+        assert_eq!(line_of(text, "ini[2].file"), Some(6));
+        assert_eq!(line_of(text, "compat.notes"), None, "no [compat] at all");
+        assert_eq!(line_of(text, ""), None);
+        assert_eq!(line_of("schema = ", "schema"), None);
+    }
+
+    #[test]
+    fn validate_text_points_a_missing_key_at_its_table() {
+        let text = "schema = 1\nid = \"x\"\nname = \"X\"\n[exe]\npath = \"x.exe\"\n\n[compat]\nstatus = \"runs\"\n";
+        let validation = validate_text(text, Path::new("x.toml"));
+        let keyed: Vec<(Option<usize>, &str)> = validation
+            .problems
+            .iter()
+            .map(|p| (p.line, p.key.as_str()))
+            .collect();
+        assert_eq!(keyed, [(Some(7), "compat.notes")]);
+    }
+
+    #[test]
+    fn validate_paths_takes_files_and_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let profiles = dir.path().join("profiles");
+        write(
+            &profiles.join("good.toml"),
+            &MINIMAL.replace("test-game", "good"),
+        );
+        write(
+            &profiles.join("bad.toml"),
+            &MINIMAL.replace("test-game", "other"),
+        );
+        write(&profiles.join("._bad.toml"), "\0");
+        write(&profiles.join("notes.txt"), "not a profile");
+        let single = dir.path().join("single.toml");
+        write(&single, &MINIMAL.replace("test-game", "single"));
+
+        let validations = validate_paths(&[single.clone(), profiles.clone()]).unwrap();
+
+        let summary: Vec<(PathBuf, bool)> = validations
+            .iter()
+            .map(|v| (v.path.clone(), v.is_valid()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (single, true),
+                (profiles.join("bad.toml"), false),
+                (profiles.join("good.toml"), true),
+            ]
+        );
+        assert_eq!(
+            validations[1].problems[0].to_string(),
+            "line 3: id \"other\" does not match the file name"
+        );
+
+        let missing = validate_paths(&[dir.path().join("missing.toml")]).unwrap_err();
+        assert!(matches!(missing, crate::Error::Io { .. }), "{missing:?}");
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        let err = validate_paths(&[empty]).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::Error::NotFound {
+                    what: "profile",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_profiles_pass_validate_text() {
+        for (file, text) in BUILTIN_FILES {
+            let validation = validate_text(text, Path::new(file));
+            assert!(validation.is_valid(), "{file}: {:?}", validation.problems);
+        }
+    }
+
+    // ----- schema -----
+
+    #[test]
+    fn the_checked_in_schema_is_current() {
+        let checked_in = include_str!("../../../profiles/schema.json");
+        assert_eq!(
+            checked_in,
+            schema_json(),
+            "profiles/schema.json differs from the model; regenerate it with `just profiles-schema`"
+        );
+    }
+
+    #[test]
+    fn the_schema_states_the_rules_the_validator_enforces() {
+        let schema = serde_json::to_value(schema()).unwrap();
+        assert_eq!(schema["title"], "Uncork game profile");
+        assert_eq!(schema["additionalProperties"], false);
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(required, ["schema", "id", "name", "exe"]);
+        let properties = &schema["properties"];
+        assert_eq!(properties["schema"]["minimum"], 1);
+        assert_eq!(properties["schema"]["maximum"], 1);
+        assert_eq!(properties["id"]["pattern"], KEBAB_ID_PATTERN);
+        assert_eq!(properties["id"]["maxLength"], MAX_ID_LEN);
+        assert_eq!(
+            properties["env"]["propertyNames"]["pattern"],
+            ENV_NAME_PATTERN
+        );
+        assert_eq!(
+            properties["dll_overrides"]["additionalProperties"]["enum"],
+            serde_json::json!(OVERRIDE_VALUES)
+        );
+        let defs = &schema["$defs"];
+        for (name, values) in [
+            (
+                "CompatStatus",
+                CompatStatus::ALL.map(CompatStatus::as_str).to_vec(),
+            ),
+            ("Backend", Backend::ALL.map(Backend::as_str).to_vec()),
+        ] {
+            let text = defs[name].to_string();
+            for value in values {
+                assert!(text.contains(&format!("\"{value}\"")), "{name}: {text}");
+            }
+        }
+        assert_eq!(defs["SteamRef"]["properties"]["appid"]["minimum"], 1);
+        assert_eq!(defs["SteamRef"]["additionalProperties"], false);
+        assert_eq!(
+            defs["ProfileIni"]["properties"]["file"]["pattern"],
+            INI_FILE_PATTERN
+        );
+        assert_eq!(
+            defs["TestReport"]["properties"]["date"]["pattern"],
+            DATE_PATTERN
+        );
+    }
+
+    // ----- docs/COMPATIBILITY.md -----
+
+    /// `(app id, status)` per row of the "Current results" table of
+    /// `docs/COMPATIBILITY.md`: the app id in parentheses at the end of the
+    /// first cell, the status in backticks in the second. Rows without an
+    /// app id (the header, games off Steam) are skipped.
+    fn current_results(markdown: &str) -> Vec<(u32, String)> {
+        let section = markdown
+            .split("\n## Current results\n")
+            .nth(1)
+            .expect("docs/COMPATIBILITY.md has a \"Current results\" section");
+        let section = section.split("\n## ").next().unwrap();
+        section
+            .lines()
+            .filter(|line| line.starts_with('|'))
+            .filter_map(|line| {
+                let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+                let game = cells.get(1)?;
+                let status = cells.get(2)?;
+                let appid = game.rsplit_once('(')?.1.strip_suffix(')')?.parse().ok()?;
+                Some((appid, status.trim_matches('`').to_owned()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn current_results_reads_app_ids_and_statuses() {
+        let doc = "# T\n\n## Current results\n\nIntro.\n\n| Game | Status | Run on |\n|---|---|---|\n| A Game (12) | `runs` | x |\n| No id | `perfect` | y |\n| B (Remake) (34) | `broken` | z |\n\n## Known issues\n\n| C (56) | `perfect` |\n";
+        assert_eq!(
+            current_results(doc),
+            [(12, "runs".to_owned()), (34, "broken".to_owned())]
+        );
+    }
+
+    #[test]
+    fn builtin_statuses_match_the_compatibility_table() {
+        let table = current_results(include_str!("../../../docs/COMPATIBILITY.md"));
+        assert!(!table.is_empty(), "no rows with an app id");
+        for profile in builtin() {
+            let Some(steam) = &profile.steam else {
+                continue;
+            };
+            let Some((_, shown)) = table.iter().find(|(appid, _)| *appid == steam.appid) else {
+                panic!(
+                    "docs/COMPATIBILITY.md has no \"Current results\" row for {} ({}); add one with its status in backticks",
+                    profile.name, steam.appid
+                );
+            };
+            assert_eq!(
+                shown,
+                profile.compat.status.as_str(),
+                "{}: profiles/{}.toml says {} but the Current results table in docs/COMPATIBILITY.md shows `{shown}`; they must agree",
+                profile.name,
+                profile.id,
+                profile.compat.status
+            );
+        }
     }
 
     proptest! {
