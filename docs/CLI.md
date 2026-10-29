@@ -2,7 +2,7 @@
 
 This document is the reference for every `uncork` command and subcommand. Each section is the command's own `--help` output, unedited, so it matches the binary exactly; a short note under a heading adds what the help text cannot say. Concepts are explained elsewhere: launches and backends in [ARCHITECTURE.md](ARCHITECTURE.md), Steam in [STEAM.md](STEAM.md), performance flags in [PERFORMANCE.md](PERFORMANCE.md), the profile format in [profiles/README.md](../profiles/README.md).
 
-Generated from `uncork 0.1.0` with `COLUMNS=100`. After changing `crates/uncork/src/cli.rs`, regenerate it by running each command below with `--help` (the commands that launch something share one set of options, `LaunchFlags`).
+Generated from `uncork 0.1.0` with `COLUMNS=100`. After changing `crates/uncork/src/cli.rs`, run `just cli-doc`: it rewrites every block below from the binary's `--help` (the commands that launch something share one set of options, `LaunchFlags`). The test `crates/uncork/tests/cli_doc.rs` fails CI when a block is out of date or a listed subcommand has no section.
 
 Conventions that apply to every command:
 
@@ -929,8 +929,8 @@ Arguments:
 
 Options:
       --json
-          Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games and
-          --dry-run output)
+          Print machine-readable JSON instead of text (doctor, list, info, show, inspect, games,
+          --dry-run output and errors)
 
   -v, --verbose...
           More log output (-v info, -vv debug, -vvv trace). `RUST_LOG` overrides

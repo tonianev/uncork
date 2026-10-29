@@ -80,6 +80,10 @@ install:
 profiles-check:
     cargo test -p uncork-core profile
 
+# Rewrite docs/CLI.md from every command's --help (CI fails when it is out of date).
+cli-doc:
+    UNCORK_REGEN_CLI_DOC=1 cargo test -p uncork --test cli_doc --quiet
+
 # Lint runtime/catalog.toml offline (URLs, SHA-256 pins, sizes, licenses).
 catalog-check:
     scripts/check_catalog.sh

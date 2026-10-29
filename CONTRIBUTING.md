@@ -99,7 +99,7 @@ cargo run -p uncork -- play rise-of-nations --wine-debug +loaddll
 
 These apply to every change under `crates/`.
 
-1. The doc comments are the specification. A change in behavior changes the doc comment in the same commit, and the user-facing docs in `docs/` that describe it; a reviewer reads the diff of the docs first. A change to help text in `crates/uncork/src/cli.rs` regenerates [docs/CLI.md](docs/CLI.md).
+1. The doc comments are the specification. A change in behavior changes the doc comment in the same commit, and the user-facing docs in `docs/` that describe it; a reviewer reads the diff of the docs first. A change to help text in `crates/uncork/src/cli.rs` regenerates [docs/CLI.md](docs/CLI.md) with `just cli-doc`; CI fails when the two differ.
 2. No `unsafe` (denied workspace-wide). No `unwrap()` or `expect()` in library code except on an invariant documented next to it.
 3. Errors carry context: the path, the command or the component involved and, where there is one, the command that fixes it. Libraries use `thiserror`; only the `uncork` binary uses `anyhow`.
 4. No silent fallbacks. A backend the user asked for that is not installed or cannot run the game is an error naming the install command.
