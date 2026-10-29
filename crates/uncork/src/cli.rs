@@ -23,7 +23,7 @@ use clap_complete::Shell;
 )]
 pub struct Cli {
     /// Print machine-readable JSON instead of text (doctor, list, info, show,
-    /// inspect, games, --dry-run output and errors).
+    /// inspect, games, status, logs, launches, --dry-run output and errors).
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -54,6 +54,13 @@ pub enum Command {
 
     /// Show what a Windows executable is: 32/64-bit, graphics API, recommended backend.
     Inspect(InspectArgs),
+
+    /// Show what runs in each bottle: Wine, Steam and its sign-in, the active
+    /// backend, the main display. Changes nothing.
+    Status(StatusArgs),
+
+    /// Show a launch log: the newest of a bottle, or of one game.
+    Logs(LogsArgs),
 
     /// Manage Wine and graphics components.
     #[command(subcommand)]
@@ -215,6 +222,35 @@ pub struct RunArgs {
 pub struct InspectArgs {
     /// Path to a Windows `.exe`.
     pub exe: PathBuf,
+}
+
+/// `uncork status`.
+#[derive(Debug, Args)]
+pub struct StatusArgs {
+    /// One bottle (default: every bottle).
+    #[arg(short, long)]
+    pub bottle: Option<String>,
+}
+
+/// `uncork logs`.
+#[derive(Debug, Args)]
+pub struct LogsArgs {
+    /// Bottle (default: `default_bottle` from config, normally `steam`).
+    #[arg(short, long)]
+    pub bottle: Option<String>,
+
+    /// Only this game's logs: a profile id, Steam app id or name, else a
+    /// program name (`riseofnations.exe`, `steam` for the Steam client).
+    #[arg(short, long, value_name = "GAME")]
+    pub game: Option<String>,
+
+    /// Lines to print from the end of the log (0: the whole log).
+    #[arg(short = 'n', long, default_value_t = 50, value_name = "LINES")]
+    pub lines: usize,
+
+    /// Print only the log's path.
+    #[arg(long)]
+    pub path: bool,
 }
 
 /// `uncork runtime ...`.

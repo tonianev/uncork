@@ -870,7 +870,8 @@ pub(crate) fn layer_overrides(
 /// Where logs of `bottle` go when no [`Layout`] is at hand: the data
 /// root's `logs/` for a bottle at `<root>/bottles/<name>` (every bottle
 /// Uncork creates or imports), otherwise `<bottle>/logs`.
-pub(crate) fn logs_dir_for(bottle: &Bottle) -> PathBuf {
+#[must_use]
+pub fn logs_dir_for(bottle: &Bottle) -> PathBuf {
     let bottles = bottle.path.parent();
     match bottles.and_then(|dir| Some((dir.file_name()?, dir.parent()?))) {
         Some((name, root)) if name == "bottles" => Layout::at(root).logs_dir(),
@@ -878,9 +879,78 @@ pub(crate) fn logs_dir_for(bottle: &Bottle) -> PathBuf {
     }
 }
 
+/// The log of one launch in a bottle ([`launch_logs`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LaunchLog {
+    /// The file.
+    pub path: PathBuf,
+    /// The program's file stem as the name records it
+    /// ([`sanitize_file_part`] of it): `riseofnations`, `cmd`; `steam` for
+    /// the Steam client.
+    pub program: String,
+    /// When the launch was planned (the Unix seconds in the name).
+    pub started_unix: u64,
+}
+
+/// Every launch log of `bottle` in its log directory ([`logs_dir_for`]),
+/// newest first: the files named `<bottle>-<program>-<unix secs>.log`, as
+/// [`plan`] and the Steam client's command name them. Newest means the
+/// latest time in the name, which is when the launch was planned, not the
+/// last write; equal times are ordered by path, later first. The other
+/// files there (`<bottle>-stop.log`, `<bottle>-steam-install.log`,
+/// `bottle-<name>-create.log`) are not launch logs and are left out. A
+/// log directory that does not exist yet gives an empty list.
+///
+/// # Errors
+/// [`crate::Error::Io`] when the directory exists but cannot be listed.
+pub fn launch_logs(bottle: &Bottle) -> crate::Result<Vec<LaunchLog>> {
+    let dir = logs_dir_for(bottle);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(Error::io("cannot list directory", &dir, err)),
+    };
+    let prefix = format!("{}-", sanitize_file_part(&bottle.config.name));
+    let mut logs = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| Error::io("cannot list directory", &dir, err))?;
+        let name = entry.file_name();
+        let Some((program, started_unix)) = parse_log_name(&name.to_string_lossy(), &prefix) else {
+            continue;
+        };
+        if !entry.path().is_file() {
+            continue;
+        }
+        logs.push(LaunchLog {
+            path: entry.path(),
+            program,
+            started_unix,
+        });
+    }
+    logs.sort_by(|a, b| {
+        b.started_unix
+            .cmp(&a.started_unix)
+            .then_with(|| b.path.cmp(&a.path))
+    });
+    Ok(logs)
+}
+
+/// `(program, unix secs)` of a launch log named `<prefix><program>-<unix
+/// secs>.log`, or `None` for any other name. The program may itself
+/// contain `-`; the time is the digits after the last one.
+fn parse_log_name(name: &str, prefix: &str) -> Option<(String, u64)> {
+    let rest = name.strip_prefix(prefix)?.strip_suffix(".log")?;
+    let (program, secs) = rest.rsplit_once('-')?;
+    if program.is_empty() || secs.is_empty() || !secs.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((program.to_owned(), secs.parse().ok()?))
+}
+
 /// A file-name-safe version of `name`: ASCII letters, digits, `.`, `_` and
 /// `-` kept, everything else `_`; `program` when nothing is left.
-pub(crate) fn sanitize_file_part(name: &str) -> String {
+#[must_use]
+pub fn sanitize_file_part(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
@@ -1638,6 +1708,58 @@ mod tests {
             Path::new("/elsewhere/steam/logs")
         );
         assert_eq!(logs_dir_for(&bottle("/")), Path::new("/logs"));
+    }
+
+    #[test]
+    fn launch_logs_are_the_timestamped_files_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::at(dir.path().join("uncork"));
+        let bottle = Bottle {
+            path: layout.bottle_dir("my steam"),
+            config: toml::from_str("schema = 1\nname = \"my steam\"\nwine = \"1\"\n").unwrap(),
+            state: crate::bottle::BottleState::default(),
+        };
+        assert_eq!(launch_logs(&bottle).unwrap(), [], "no logs directory yet");
+
+        let logs = layout.logs_dir();
+        std::fs::create_dir_all(&logs).unwrap();
+        for name in [
+            "my_steam-riseofnations-1791492090.log",
+            "my_steam-steam-1791492095.log",
+            "my_steam-cmd-1791492090.log",
+            "my_steam-my-game-2-1791480000.log",
+            "my_steam-steam-install.log",
+            "my_steam-steam-stop.log",
+            "my_steam-stop.log",
+            "bottle-my_steam-create.log",
+            "other-steam-1791499999.log",
+            "my_steam-steam-1791492096.txt",
+        ] {
+            std::fs::write(logs.join(name), "").unwrap();
+        }
+        std::fs::create_dir_all(logs.join("my_steam-dir-1791499999.log")).unwrap();
+
+        let found = launch_logs(&bottle).unwrap();
+        let names: Vec<(&str, u64)> = found
+            .iter()
+            .map(|log| (log.program.as_str(), log.started_unix))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("steam", 1_791_492_095),
+                ("riseofnations", 1_791_492_090),
+                ("cmd", 1_791_492_090),
+                ("my-game-2", 1_791_480_000),
+            ],
+            "{found:#?}"
+        );
+        assert_eq!(found[0].path, logs.join("my_steam-steam-1791492095.log"));
+        assert_eq!(parse_log_name("b-x-1.log", "b-"), Some(("x".to_owned(), 1)));
+        assert_eq!(parse_log_name("b-x-.log", "b-"), None);
+        assert_eq!(parse_log_name("b--1.log", "b-"), None);
+        assert_eq!(parse_log_name("b-x-1a.log", "b-"), None);
+        assert_eq!(parse_log_name("b-x-1.log", "c-"), None);
     }
 
     #[test]

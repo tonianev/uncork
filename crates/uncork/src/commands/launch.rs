@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal as _;
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitCode};
+use std::process::{Child, ExitCode, ExitStatus};
 use std::time::Duration;
 
 use anyhow::{Context as _, anyhow, bail};
@@ -177,35 +178,38 @@ pub(super) fn play_steam_game(
         return Ok(ExitCode::SUCCESS);
     }
     print_warnings(&outcome.plan.warnings);
-    if outcome.started_steam && outcome.mode != LaunchMode::Applaunch {
-        println!("Started Steam in bottle {}.", bottle.config.name);
+    if !ctx.json {
+        if outcome.started_steam && outcome.mode != LaunchMode::Applaunch {
+            println!("Started Steam in bottle {}.", bottle.config.name);
+        }
+        for file in &outcome.ini_changed {
+            println!("Updated {}", file.display());
+        }
     }
-    for file in &outcome.ini_changed {
-        println!("Updated {}", file.display());
-    }
-    report_play(outcome, appid, &bottle, &wine, flags.wait)
+    report_play(ctx, outcome, profile, appid, &bottle, &wine, flags.wait)
 }
 
 /// Stop `bottle` when the main display changed since its running Wine
 /// session started ([`uncork_core::steam::display_change`]) and
 /// [`confirm_display_restart`] agrees, so that the program starts in a
 /// session that knows the new display (`run`; `play` leaves this to
-/// [`uncork_core::steam::play`], once the game is planned).
+/// [`uncork_core::steam::play`], once the game is planned). Returns
+/// whether the bottle was stopped.
 fn restart_if_display_changed(
     bottle: &Bottle,
     wine: &WineRuntime,
     display: Option<&Display>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let Some(change) = uncork_core::steam::display_change(bottle, wine, display)
         .context("cannot tell whether the bottle is running")?
     else {
-        return Ok(());
+        return Ok(false);
     };
-    if confirm_display_restart(&bottle.config.name, &change, "program") {
-        uncork_core::steam::stop_bottle(bottle, wine, uncork_core::steam::SHUTDOWN_GRACE)
-            .with_context(|| format!("cannot stop bottle {}", bottle.config.name))?;
+    if !confirm_display_restart(&bottle.config.name, &change, "program") {
+        return Ok(false);
     }
-    Ok(())
+    uncork_core::steam::stop_bottle(bottle, wine, uncork_core::steam::SHUTDOWN_GRACE)
+        .with_context(|| format!("cannot stop bottle {}", bottle.config.name))
 }
 
 /// Whether to restart bottle `bottle` because the main display changed
@@ -269,9 +273,12 @@ fn print_focus_hint(what: &str) {
 /// `--wait` waits for that process only while Steam runs in the bottle
 /// (always in Direct and Applaunch mode): Steam keeps the bottle's
 /// wineserver alive, so waiting for it would last until the user quits
-/// Steam.
+/// Steam. With `--json` nothing is printed until the launch (and the
+/// wait) is over, then one [`LaunchReport`].
 fn report_play(
+    ctx: &Ctx,
     outcome: PlayOutcome,
+    profile: Option<&GameProfile>,
     appid: u32,
     bottle: &Bottle,
     wine: &WineRuntime,
@@ -279,47 +286,84 @@ fn report_play(
 ) -> anyhow::Result<ExitCode> {
     let program = plan_program(&outcome.plan);
     let backend = outcome.plan.activation.backend;
-    let Some(mut child) = outcome.child else {
-        println!("Started {program} on {backend}.");
-        return Ok(ExitCode::SUCCESS);
-    };
+    let mut child = outcome
+        .child
+        .context("nothing was started (internal error: a dry run reached report_play)")?;
     let waited_for = if outcome.mode == LaunchMode::Applaunch {
-        println!(
-            "Started Steam in bottle {} with -applaunch {appid} (pid {}); Steam starts {program} on {backend}.",
-            bottle.config.name,
-            child.id()
-        );
-        println!("Steam log: {}", outcome.log.display());
+        if !ctx.json {
+            println!(
+                "Started Steam in bottle {} with -applaunch {appid} (pid {}); Steam starts {program} on {backend}.",
+                bottle.config.name,
+                child.id()
+            );
+            println!("Steam log: {}", outcome.log.display());
+        }
         "Steam".to_owned()
     } else {
-        println!("Started {program} on {backend} (pid {}).", child.id());
-        println!("Log: {}", outcome.log.display());
+        if !ctx.json {
+            println!("Started {program} on {backend} (pid {}).", child.id());
+            println!("Log: {}", outcome.log.display());
+        }
         program
     };
-    print_focus_hint("game");
-    if !wait {
-        return Ok(ExitCode::SUCCESS);
+    if !ctx.json {
+        print_focus_hint("game");
     }
-    let status = child
-        .wait()
-        .with_context(|| format!("cannot wait for {waited_for}"))?;
-    let steam_runs = match outcome.mode {
-        LaunchMode::Direct | LaunchMode::Applaunch => true,
-        LaunchMode::Standalone => {
-            uncork_core::steam::is_running(bottle, wine).unwrap_or_else(|err| {
-                tracing::info!(
-                    "cannot tell whether Steam runs in bottle {}: {err}",
-                    bottle.config.name
-                );
-                false
-            })
+    let mut exit = None;
+    if wait {
+        let status = child
+            .wait()
+            .with_context(|| format!("cannot wait for {waited_for}"))?;
+        let steam_runs = match outcome.mode {
+            LaunchMode::Direct | LaunchMode::Applaunch => true,
+            LaunchMode::Standalone => {
+                uncork_core::steam::is_running(bottle, wine).unwrap_or_else(|err| {
+                    tracing::info!(
+                        "cannot tell whether Steam runs in bottle {}: {err}",
+                        bottle.config.name
+                    );
+                    false
+                })
+            }
+        };
+        if !steam_runs {
+            wait_for_wineserver(bottle, wine)?;
         }
-    };
-    if !steam_runs {
-        wait_for_wineserver(bottle, wine)?;
+        if !ctx.json {
+            println!("{waited_for} exited ({status}).");
+        }
+        exit = Some(status);
     }
-    println!("{waited_for} exited ({status}).");
-    Ok(exit_code(status))
+    if ctx.json {
+        let steam = match outcome.mode {
+            LaunchMode::Direct | LaunchMode::Applaunch => Some(SteamView {
+                started: outcome.started_steam,
+                pid: outcome.steam_pid,
+            }),
+            LaunchMode::Standalone => None,
+        };
+        output::print_json(&LaunchReport {
+            game: Some(GameView {
+                profile: profile.map(|profile| profile.id.as_str()),
+                name: profile.map_or(outcome.app_name.as_str(), |profile| profile.name.as_str()),
+                appid,
+            }),
+            bottle: &bottle.config.name,
+            backend: BackendView {
+                name: backend,
+                version: outcome.plan.activation.version.as_deref(),
+            },
+            mode: outcome.mode,
+            pid: child.id(),
+            log: &outcome.log,
+            steam,
+            restarted: outcome.restarted,
+            ini_changed: &outcome.ini_changed,
+            exit: exit.map(ExitView::from),
+            plan: plan_json(&outcome.plan)?,
+        })?;
+    }
+    Ok(exit.map_or(ExitCode::SUCCESS, exit_code))
 }
 
 /// `wineserver --wait` for `bottle`.
@@ -383,10 +427,18 @@ pub(super) fn run(ctx: &Ctx, args: &RunArgs) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     print_warnings(&plan.warnings);
-    restart_if_display_changed(&bottle, &wine, display.as_ref())?;
+    let restarted = restart_if_display_changed(&bottle, &wine, display.as_ref())?;
     let child = launch::execute(&plan, &mut bottle, &wine)
         .with_context(|| format!("cannot start {}", exe.display()))?;
-    report_launch(&plan, Some(child), &bottle, &wine, args.launch.wait)
+    report_launch(
+        ctx,
+        &plan,
+        child,
+        &bottle,
+        &wine,
+        args.launch.wait,
+        restarted,
+    )
 }
 
 /// Print a plan's warnings to stderr as `warning: ...` lines (a real
@@ -477,6 +529,88 @@ fn ini_edits(
 struct DryRunView<'a> {
     plan: serde_json::Value,
     ini: &'a [IniEditView],
+}
+
+/// `--json` output of a real launch (`play`, `run`, `steam launch`): one
+/// object, printed once the launch, and with `--wait` the program, is over.
+#[derive(Debug, Serialize)]
+struct LaunchReport<'a> {
+    /// The game, when the launch came from a profile or a Steam app id
+    /// (`play`, `steam launch`); `None` for `run`.
+    game: Option<GameView<'a>>,
+    bottle: &'a str,
+    /// The game's graphics backend.
+    backend: BackendView<'a>,
+    /// How it was started; `standalone` for `run`.
+    mode: LaunchMode,
+    /// The Unix pid of the process Uncork started: the Wine loader of the
+    /// game, or of the Steam client in `applaunch` mode.
+    pid: u32,
+    /// Where that process's output goes.
+    log: &'a Path,
+    /// The Steam client, in `direct` and `applaunch` mode; `None` when the
+    /// launch does not involve it.
+    steam: Option<SteamView>,
+    /// The bottle was stopped first because the main display had changed
+    /// since its Wine session started.
+    restarted: bool,
+    /// INI files the profile changed before the launch.
+    ini_changed: &'a [PathBuf],
+    /// With `--wait`: how the process exited.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit: Option<ExitView>,
+    /// The launch plan, as `--dry-run --json` prints it ([`plan_json`]).
+    plan: serde_json::Value,
+}
+
+/// The game in a [`LaunchReport`].
+#[derive(Debug, Serialize)]
+struct GameView<'a> {
+    /// The profile's id, when one applied.
+    profile: Option<&'a str>,
+    /// The profile's name, else the name in Steam's app manifest.
+    name: &'a str,
+    /// The Steam app id.
+    appid: u32,
+}
+
+/// The backend in a [`LaunchReport`].
+#[derive(Debug, Serialize)]
+struct BackendView<'a> {
+    name: Backend,
+    /// The component version; `None` for WineD3D, which is Wine's own.
+    version: Option<&'a str>,
+}
+
+/// The Steam client in a [`LaunchReport`].
+#[derive(Debug, Serialize)]
+struct SteamView {
+    /// Uncork started the client for this launch (it was not running).
+    started: bool,
+    /// The client's `ActiveProcess` pid (a Windows process id, as the
+    /// client records it; the same `uncork status` shows).
+    pid: Option<u32>,
+}
+
+/// How a waited-for process exited, in a [`LaunchReport`].
+#[derive(Debug, Serialize)]
+struct ExitView {
+    /// The exit status, when it exited.
+    code: Option<i32>,
+    /// The signal, when it was killed by one.
+    signal: Option<i32>,
+    /// Exited with status 0.
+    success: bool,
+}
+
+impl From<ExitStatus> for ExitView {
+    fn from(status: ExitStatus) -> ExitView {
+        ExitView {
+            code: status.code(),
+            signal: status.signal(),
+            success: status.success(),
+        }
+    }
 }
 
 /// `spec` as `--json` output shows it: its serialization, except that each
@@ -592,36 +726,60 @@ fn describe_strategy(strategy: &Strategy) -> String {
     }
 }
 
-/// Print what started; with `wait`, wait for it and for the bottle's
-/// wineserver, and exit with failure when the program failed.
+/// Print what `run` started; with `wait`, wait for it and for the bottle's
+/// wineserver, and exit with failure when the program failed. With
+/// `--json` nothing is printed until then, and one [`LaunchReport`]
+/// (`game` and `steam` null, `mode` standalone) follows; `restarted` says
+/// whether the bottle was stopped for a changed main display.
 fn report_launch(
+    ctx: &Ctx,
     plan: &LaunchPlan,
-    child: Option<Child>,
+    mut child: Child,
     bottle: &Bottle,
     wine: &WineRuntime,
     wait: bool,
+    restarted: bool,
 ) -> anyhow::Result<ExitCode> {
     let program = plan_program(plan);
-    let Some(mut child) = child else {
-        println!("Started {program} on {}.", plan.activation.backend);
-        return Ok(ExitCode::SUCCESS);
-    };
-    println!(
-        "Started {program} on {} (pid {}).",
-        plan.activation.backend,
-        child.id()
-    );
-    println!("Log: {}", plan.log.display());
-    print_focus_hint("program");
-    if !wait {
-        return Ok(ExitCode::SUCCESS);
+    if !ctx.json {
+        println!(
+            "Started {program} on {} (pid {}).",
+            plan.activation.backend,
+            child.id()
+        );
+        println!("Log: {}", plan.log.display());
+        print_focus_hint("program");
     }
-    let status = child
-        .wait()
-        .with_context(|| format!("cannot wait for {program}"))?;
-    wait_for_wineserver(bottle, wine)?;
-    println!("{program} exited ({status}).");
-    Ok(exit_code(status))
+    let mut exit = None;
+    if wait {
+        let status = child
+            .wait()
+            .with_context(|| format!("cannot wait for {program}"))?;
+        wait_for_wineserver(bottle, wine)?;
+        if !ctx.json {
+            println!("{program} exited ({status}).");
+        }
+        exit = Some(status);
+    }
+    if ctx.json {
+        output::print_json(&LaunchReport {
+            game: None,
+            bottle: &bottle.config.name,
+            backend: BackendView {
+                name: plan.activation.backend,
+                version: plan.activation.version.as_deref(),
+            },
+            mode: LaunchMode::Standalone,
+            pid: child.id(),
+            log: &plan.log,
+            steam: None,
+            restarted,
+            ini_changed: &[],
+            exit: exit.map(ExitView::from),
+            plan: plan_json(plan)?,
+        })?;
+    }
+    Ok(exit.map_or(ExitCode::SUCCESS, exit_code))
 }
 
 /// The program a plan starts, for messages: the first argument after the

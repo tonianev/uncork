@@ -60,7 +60,10 @@
 //! anything else that kills a bottle's processes should do the same. A pid
 //! found while no wineserver runs for the prefix (the client crashed, was
 //! force-quit, or the Mac restarted) is stale: [`is_running`] clears it
-//! and reports the client as not running.
+//! and reports the client as not running. [`client_snapshot`] is the
+//! read-only look (`uncork status`): it reads the registry only while a
+//! wineserver runs, since `wine reg query` would otherwise start one, and
+//! clears nothing.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -490,7 +493,7 @@ fn stop_with(
                 Ok(child) => reap_in_background(child),
                 Err(err) => tracing::warn!("cannot ask Steam in bottle {name} to exit: {err}"),
             }
-            if wait_for(bottle, wine, timeout, poll, false)? {
+            if wait_for(bottle, wine, timeout, poll, false)?.is_some() {
                 return Ok(());
             }
             tracing::warn!(
@@ -760,6 +763,9 @@ pub struct ClientStatus {
     pub server: bool,
     /// The Steam client runs ([`is_running`]).
     pub running: bool,
+    /// The client's `ActiveProcess` pid (a Windows process id, as the
+    /// client records it) while it runs; `None` otherwise.
+    pub pid: Option<u32>,
 }
 
 /// [`is_running`], also saying whether a wineserver ran before the query:
@@ -770,9 +776,9 @@ pub struct ClientStatus {
 pub fn client_status(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<ClientStatus> {
     // Asked before the query, which starts a wineserver of its own.
     let server = server_running(bottle, wine)?;
-    let running = match active_pid(bottle, wine)? {
-        None | Some(0) => false,
-        Some(_) if server => true,
+    let pid = match active_pid(bottle, wine)? {
+        None | Some(0) => None,
+        Some(pid) if server => Some(pid),
         Some(pid) => {
             tracing::info!(
                 "Steam's ActiveProcess pid {pid:#x} in bottle {} is left over from a client that did not exit cleanly (no wineserver was running); clearing it",
@@ -784,10 +790,69 @@ pub fn client_status(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<Clien
                     bottle.config.name
                 );
             }
-            false
+            None
         }
     };
-    Ok(ClientStatus { server, running })
+    Ok(ClientStatus {
+        server,
+        running: pid.is_some(),
+        pid,
+    })
+}
+
+/// A read-only look at the Steam client in a bottle ([`client_snapshot`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ClientSnapshot {
+    /// A wineserver runs for the bottle ([`server_running`]).
+    pub server: bool,
+    /// The `ActiveProcess` pid as the registry records it (a Windows
+    /// process id); `None` when the key or value does not exist, or when
+    /// the registry was not read because no wineserver runs.
+    pub pid: Option<u32>,
+    /// The `ActiveProcess` `ActiveUser` account id as recorded; `None` as
+    /// for `pid`.
+    pub user: Option<u32>,
+}
+
+impl ClientSnapshot {
+    /// The client runs: a wineserver runs and the pid is non-zero.
+    #[must_use]
+    pub fn running(&self) -> bool {
+        self.server && self.pid.is_some_and(|pid| pid != 0)
+    }
+
+    /// The client runs and an account is signed in (`ActiveUser` non-zero).
+    #[must_use]
+    pub fn signed_in(&self) -> bool {
+        self.running() && self.user.is_some_and(|user| user != 0)
+    }
+}
+
+/// What `uncork status` reports about the client in `bottle`, changing
+/// nothing: whether a wineserver runs ([`server_running`], which starts
+/// nothing) and, only when one does, the `ActiveProcess` `pid` and
+/// `ActiveUser` values. With no wineserver the registry is not read,
+/// because `wine reg query` would start one; the client is then not
+/// running whatever the registry says, and a stale pid is left as it is
+/// ([`client_status`] clears it, and the next `play` or `steam start`
+/// goes through that).
+///
+/// # Errors
+/// As [`is_running`].
+pub fn client_snapshot(bottle: &Bottle, wine: &WineRuntime) -> crate::Result<ClientSnapshot> {
+    let server = server_running(bottle, wine)?;
+    if !server {
+        return Ok(ClientSnapshot {
+            server,
+            pid: None,
+            user: None,
+        });
+    }
+    Ok(ClientSnapshot {
+        server,
+        pid: active_pid(bottle, wine)?,
+        user: active_user(bottle, wine)?,
+    })
 }
 
 /// Whether a wineserver runs for `bottle`
@@ -947,11 +1012,20 @@ pub fn ensure_running(
     display: Option<&Display>,
     timeout: Duration,
 ) -> crate::Result<()> {
-    start_if_needed(layout, bottle, wine, display, timeout, POLL_INTERVAL).map(|_started| ())
+    start_if_needed(layout, bottle, wine, display, timeout, POLL_INTERVAL).map(|_start| ())
 }
 
-/// [`ensure_running`] with a configurable polling interval; `true` if it
-/// started the client.
+/// What [`start_if_needed`] found or did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClientStart {
+    /// The client was started (it was not running).
+    started: bool,
+    /// The running client's `ActiveProcess` pid ([`ClientStatus::pid`]).
+    pid: u32,
+}
+
+/// [`ensure_running`] with a configurable polling interval; says whether
+/// it started the client.
 fn start_if_needed(
     layout: &Layout,
     bottle: &mut Bottle,
@@ -959,11 +1033,11 @@ fn start_if_needed(
     display: Option<&Display>,
     timeout: Duration,
     poll: Duration,
-) -> crate::Result<bool> {
+) -> crate::Result<ClientStart> {
     let started_at = Instant::now();
     let status = client_status(bottle, wine)?;
-    let started = if status.running {
-        false
+    let (started, pid) = if let Some(pid) = status.pid {
+        (false, pid)
     } else {
         let steam = find_steam(bottle)?;
         prepare_client_dxvk_logged(layout, bottle, &steam)?;
@@ -978,8 +1052,9 @@ fn start_if_needed(
         // `wait_until_signed_in` cannot mistake it for this session's log-on.
         zero_active_value(bottle, wine, client::ACTIVE_USER_VALUE)?;
         reap_in_background(crate::process::spawn(&spec)?);
-        wait_until_running(bottle, wine, timeout, poll, &spec)?;
-        true
+        let running = wait_until_running(bottle, wine, timeout, poll, &spec)?;
+        // `running` was reached, so the pid is non-zero.
+        (true, running.pid.unwrap_or(0))
     };
     let left = timeout.saturating_sub(started_at.elapsed());
     if wait_until_signed_in(bottle, wine, left, poll)? && started {
@@ -987,7 +1062,7 @@ fn start_if_needed(
         // to finish the log-on before a game asks it for the user.
         std::thread::sleep(poll);
     }
-    Ok(started)
+    Ok(ClientStart { started, pid })
 }
 
 /// Wait until Steam reports a signed-in account ([`active_user`] non-zero),
@@ -1096,16 +1171,17 @@ fn prepare_client_dxvk_logged(
     Ok(())
 }
 
-/// Poll until the client runs; a timeout is an error naming `spec`'s log.
+/// Poll until the client runs, returning what the poll saw (its pid
+/// included); a timeout is an error naming `spec`'s log.
 fn wait_until_running(
     bottle: &Bottle,
     wine: &WineRuntime,
     timeout: Duration,
     poll: Duration,
     spec: &CommandSpec,
-) -> crate::Result<()> {
-    if wait_for(bottle, wine, timeout, poll, true)? {
-        return Ok(());
+) -> crate::Result<ClientStatus> {
+    if let Some(status) = wait_for(bottle, wine, timeout, poll, true)? {
+        return Ok(status);
     }
     Err(Error::Command {
         program: "steam.exe".to_owned(),
@@ -1117,26 +1193,28 @@ fn wait_until_running(
     })
 }
 
-/// Poll [`is_running`] every `poll` (shortened to the time left) until it
-/// equals `running`; `false` once `timeout` has passed. Checks at least once.
+/// Poll [`client_status`] every `poll` (shortened to the time left) until
+/// its `running` equals `running`, returning that status; `None` once
+/// `timeout` has passed. Checks at least once.
 fn wait_for(
     bottle: &Bottle,
     wine: &WineRuntime,
     timeout: Duration,
     poll: Duration,
     running: bool,
-) -> crate::Result<bool> {
+) -> crate::Result<Option<ClientStatus>> {
     let deadline = Instant::now().checked_add(timeout);
     loop {
         let left = deadline.map_or(poll, |deadline| {
             deadline.saturating_duration_since(Instant::now())
         });
         std::thread::sleep(poll.min(left));
-        if is_running(bottle, wine)? == running {
-            return Ok(true);
+        let status = client_status(bottle, wine)?;
+        if status.running == running {
+            return Ok(Some(status));
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Ok(false);
+            return Ok(None);
         }
     }
 }
@@ -1361,6 +1439,13 @@ pub struct PlayOutcome {
     pub ini_changed: Vec<std::path::PathBuf>,
     /// `true` if Steam had to be started first.
     pub started_steam: bool,
+    /// The Steam client's `ActiveProcess` pid (a Windows process id, as
+    /// the client records it) once the game started in
+    /// [`LaunchMode::Direct`] or [`LaunchMode::Applaunch`] mode; `None` in
+    /// [`LaunchMode::Standalone`] mode and for a dry run.
+    pub steam_pid: Option<u32>,
+    /// The game's name as Steam's app manifest records it.
+    pub app_name: String,
     /// The main display changed since the bottle's running Wine session
     /// started (a dry run only reports it).
     pub display_change: Option<DisplayChange>,
@@ -1488,6 +1573,8 @@ fn play_with(
             child: None,
             ini_changed: Vec::new(),
             started_steam: false,
+            steam_pid: None,
+            app_name: app.manifest.name.clone(),
             display_change,
             restarted: false,
         });
@@ -1520,9 +1607,9 @@ fn play_with(
         )?,
         None => Vec::new(),
     };
-    let (child, log, started_steam) = match mode {
+    let (child, log, started_steam, steam_pid) = match mode {
         LaunchMode::Direct => {
-            let started = start_if_needed(
+            let start = start_if_needed(
                 layout,
                 bottle,
                 wine,
@@ -1531,15 +1618,15 @@ fn play_with(
                 request.poll,
             )?;
             let child = crate::launch::execute(&plan, bottle, wine)?;
-            (child, plan.log.clone(), started)
+            (child, plan.log.clone(), start.started, Some(start.pid))
         }
         LaunchMode::Applaunch => {
-            let (child, log) = applaunch(layout, bottle, wine, &plan, request)?;
-            (child, log, true)
+            let (child, log, pid) = applaunch(layout, bottle, wine, &plan, request)?;
+            (child, log, true, Some(pid))
         }
         LaunchMode::Standalone => {
             let child = crate::launch::execute(&plan, bottle, wine)?;
-            (child, plan.log.clone(), false)
+            (child, plan.log.clone(), false, None)
         }
     };
     Ok(PlayOutcome {
@@ -1549,20 +1636,22 @@ fn play_with(
         log,
         ini_changed,
         started_steam,
+        steam_pid,
+        app_name: app.manifest.name.clone(),
         display_change,
         restarted,
     })
 }
 
-/// The `Applaunch` branch of [`play`]; returns the client it started and
-/// its log.
+/// The `Applaunch` branch of [`play`]; returns the client it started, its
+/// log and its `ActiveProcess` pid.
 fn applaunch(
     layout: &Layout,
     bottle: &mut Bottle,
     wine: &WineRuntime,
     plan: &LaunchPlan,
     request: &PlayRequest<'_>,
-) -> crate::Result<(Child, PathBuf)> {
+) -> crate::Result<(Child, PathBuf, u32)> {
     if is_running(bottle, wine)? {
         tracing::info!(
             "restarting Steam in bottle {} with the game's environment",
@@ -1584,12 +1673,17 @@ fn applaunch(
     game_args.extend(request.args.iter().cloned());
     let spec = applaunch_spec(bottle, wine, &steam, plan, request.appid, &game_args);
     let child = crate::process::spawn(&spec)?;
-    if let Err(err) = wait_until_running(bottle, wine, request.steam_timeout, request.poll, &spec) {
-        reap_in_background(child);
-        return Err(err);
-    }
+    let running = match wait_until_running(bottle, wine, request.steam_timeout, request.poll, &spec)
+    {
+        Ok(running) => running,
+        Err(err) => {
+            reap_in_background(child);
+            return Err(err);
+        }
+    };
     let log = spec.log.unwrap_or_else(|| plan.log.clone());
-    Ok((child, log))
+    // `running` was reached, so the pid is non-zero.
+    Ok((child, log, running.pid.unwrap_or(0)))
 }
 
 /// `steam.exe -silent -nofriendsui -applaunch <appid> <game args>` with the
@@ -2435,7 +2529,11 @@ mod tests {
             Duration::from_millis(10),
         )
         .unwrap();
-        assert!(started, "a stale pid does not count as a running client");
+        assert!(
+            started.started,
+            "a stale pid does not count as a running client"
+        );
+        assert_eq!(started.pid, 0x274);
         let forget = fx.position(r"wine reg add HKCU\Software\Valve\Steam\ActiveProcess /v pid");
         let start = fx.position("steam.exe -silent -nofriendsui |");
         assert!(forget < start, "{:#?}", fx.calls());
@@ -2505,7 +2603,7 @@ mod tests {
             Duration::from_millis(10),
         )
         .unwrap();
-        assert!(started);
+        assert!(started.started);
         let signed_in = fx.position("/v ActiveUser |");
         let start = fx.position("steam.exe -silent -nofriendsui |");
         assert!(start < signed_in, "{:#?}", fx.calls());
@@ -2534,7 +2632,7 @@ mod tests {
             Duration::from_millis(10),
         )
         .unwrap();
-        assert!(started);
+        assert!(started.started);
         let calls = fx.calls();
         let cleared = fx.position("/v ActiveUser /t REG_DWORD /d 0 /f |");
         let start = fx.position("steam.exe -silent -nofriendsui |");
@@ -2609,7 +2707,7 @@ mod tests {
             Duration::from_millis(10),
         )
         .unwrap();
-        assert!(!started);
+        assert!(!started.started);
         assert_eq!(active_user(&fx.bottle, &fx.wine).unwrap(), None);
     }
 
@@ -2627,7 +2725,7 @@ mod tests {
             Duration::from_millis(20),
         )
         .unwrap();
-        assert!(started);
+        assert!(started.started);
         let again = start_if_needed(
             &fx.layout,
             &mut fx.bottle,
@@ -2637,13 +2735,81 @@ mod tests {
             Duration::from_millis(20),
         )
         .unwrap();
-        assert!(!again);
+        assert!(!again.started);
+        assert_eq!(again.pid, started.pid, "the same client");
         let starts = fx
             .calls()
             .iter()
             .filter(|call| call.contains("steam.exe -silent -nofriendsui |"))
             .count();
         assert_eq!(starts, 1);
+    }
+
+    #[test]
+    fn a_snapshot_never_queries_the_registry_without_a_wineserver() {
+        // `wine reg query` would start a wineserver; `uncork status` must
+        // not. A stale pid is reported as not running and left alone.
+        let fx = Fixture::new();
+        fx.install_steam();
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        let snapshot = client_snapshot(&fx.bottle, &fx.wine).unwrap();
+        assert_eq!(
+            snapshot,
+            ClientSnapshot {
+                server: false,
+                pid: None,
+                user: None,
+            }
+        );
+        assert!(!snapshot.running() && !snapshot.signed_in());
+        let calls = fx.calls();
+        assert_eq!(calls.len(), 1, "{calls:#?}");
+        assert!(calls[0].starts_with("wineserver -k0 |"), "{calls:#?}");
+        assert_eq!(fx.pid().as_deref(), Some("0x274"), "not cleared");
+        assert!(!fx.state.join("server").exists(), "nothing was started");
+    }
+
+    #[test]
+    fn a_snapshot_reads_the_pid_and_account_while_a_wineserver_runs() {
+        let fx = Fixture::new();
+        fx.install_steam();
+        fx.flag("server");
+        fs::write(fx.state.join("pid"), "0x274").unwrap();
+        fs::write(fx.state.join("user"), "0x1a9498de").unwrap();
+        let snapshot = client_snapshot(&fx.bottle, &fx.wine).unwrap();
+        assert_eq!(
+            snapshot,
+            ClientSnapshot {
+                server: true,
+                pid: Some(0x274),
+                user: Some(0x1a94_98de),
+            }
+        );
+        assert!(snapshot.running() && snapshot.signed_in());
+        let calls = fx.calls();
+        assert_eq!(calls.len(), 3, "{calls:#?}");
+        assert!(calls[0].starts_with("wineserver -k0 |"), "{calls:#?}");
+        assert!(
+            calls[1].contains("reg query ") && calls[1].contains("/v pid |"),
+            "{calls:#?}"
+        );
+        assert!(calls[2].contains("/v ActiveUser |"), "{calls:#?}");
+        assert!(
+            !calls.iter().any(|call| call.contains("reg add")),
+            "{calls:#?}"
+        );
+
+        // Signed out: the pid without an account.
+        fs::write(fx.state.join("user"), "0x0").unwrap();
+        let snapshot = client_snapshot(&fx.bottle, &fx.wine).unwrap();
+        assert!(snapshot.running() && !snapshot.signed_in());
+        assert_eq!(snapshot.user, Some(0));
+
+        // A clean exit leaves pid 0: a wineserver without a client.
+        fs::write(fx.state.join("pid"), "0x0").unwrap();
+        let snapshot = client_snapshot(&fx.bottle, &fx.wine).unwrap();
+        assert!(snapshot.server && !snapshot.running());
+        assert_eq!(snapshot.pid, Some(0));
     }
 
     #[test]

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use common::PeBuilder;
 use predicates::prelude::*;
 use predicates::str::contains;
+use serde_json::Value;
 use support::{EXTERNAL_5K_DISPLAY, FAKE_WINE, Home, write_script};
 use uncork_core::process::CommandSpec;
 
@@ -664,6 +665,114 @@ fn exec_reports_bad_plans() {
         .assert()
         .code(1)
         .stderr(contains("cannot read launch plan"));
+}
+
+#[test]
+fn play_json_reports_what_started() {
+    let home = Home::new();
+    home.install_fake_wine();
+    home.write_bottle("b", FAKE_WINE);
+    let steam = home.install_fake_steam("b", &[(70, "Half-Life", 4)]);
+    PeBuilder::pe32().write(&steam.join("steamapps/common/Half-Life/hl.exe"));
+    home.fake_running_steam();
+
+    let output = home
+        .uncork()
+        .args([
+            "--json",
+            "play",
+            "70",
+            "-b",
+            "b",
+            "--wait",
+            "--backend",
+            "wined3d",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    let report: Value = serde_json::from_str(&text).unwrap_or_else(|err| panic!("{err}: {text}"));
+    assert_eq!(report["game"]["profile"], Value::Null);
+    assert_eq!(report["game"]["name"], "Half-Life", "from Steam's manifest");
+    assert_eq!(report["game"]["appid"], 70);
+    assert_eq!(report["bottle"], "b");
+    assert_eq!(report["backend"]["name"], "wined3d");
+    assert_eq!(report["backend"]["version"], Value::Null);
+    assert_eq!(report["mode"], "direct");
+    assert!(report["pid"].is_u64(), "{report}");
+    assert!(
+        report["log"].as_str().unwrap().contains("/logs/b-hl-"),
+        "{report}"
+    );
+    assert_eq!(report["steam"]["started"], false);
+    assert_eq!(report["steam"]["pid"], 0x274);
+    assert_eq!(report["restarted"], false);
+    assert_eq!(report["ini_changed"], serde_json::json!([]));
+    assert_eq!(report["exit"]["success"], true);
+    assert_eq!(report["exit"]["code"], 0);
+    assert_eq!(report["exit"]["signal"], Value::Null);
+    assert_eq!(report["plan"]["activation"]["backend"], "wined3d");
+    assert_eq!(
+        report["plan"]["command"]["env"]["SteamAppId"], "70",
+        "{report}"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        !stderr.contains("opened behind this window"),
+        "the hint is text-only: {stderr}"
+    );
+
+    // Without --wait there is no exit object, and the process is left running.
+    let report = home.json(&["play", "70", "-b", "b", "--backend", "wined3d"]);
+    assert!(report.get("exit").is_none(), "{report}");
+    assert!(report["pid"].is_u64(), "{report}");
+    assert_eq!(report["mode"], "direct");
+
+    // With a profile, the game is named by it.
+    let profiles = home.root().join("profiles");
+    fs::create_dir_all(&profiles).unwrap();
+    fs::write(
+        profiles.join("hl.toml"),
+        "schema = 1\nid = \"hl\"\nname = \"Half-Life (profile)\"\n[steam]\nappid = 70\n[exe]\npath = \"hl.exe\"\n[launch]\nmode = \"standalone\"\n",
+    )
+    .unwrap();
+    let report = home.json(&["steam", "launch", "70", "-b", "b", "--backend", "wined3d"]);
+    assert_eq!(report["game"]["profile"], "hl");
+    assert_eq!(report["game"]["name"], "Half-Life (profile)");
+    assert_eq!(report["mode"], "standalone");
+    assert_eq!(report["steam"], Value::Null, "{report}");
+}
+
+#[test]
+fn run_json_reports_what_started() {
+    let home = home_with_bottle();
+    let exe = game_in_bottle(&home, "test1");
+    let exe = exe.to_str().unwrap();
+    let report = home.json(&["run", "-b", "test1", "--wait", "--backend", "wined3d", exe]);
+    assert_eq!(report["game"], Value::Null);
+    assert_eq!(report["steam"], Value::Null);
+    assert_eq!(report["mode"], "standalone");
+    assert_eq!(report["bottle"], "test1");
+    assert_eq!(report["backend"]["name"], "wined3d");
+    assert!(report["pid"].is_u64(), "{report}");
+    assert_eq!(report["exit"]["code"], 0);
+    assert_eq!(report["restarted"], false);
+    assert!(
+        report["log"]
+            .as_str()
+            .unwrap()
+            .contains("/logs/test1-game-"),
+        "{report}"
+    );
+    assert_eq!(report["plan"]["command"]["args"][0], exe);
+    let calls = home.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("wineserver --wait")),
+        "run --wait waits for the wineserver: {calls:#?}"
+    );
 }
 
 #[test]

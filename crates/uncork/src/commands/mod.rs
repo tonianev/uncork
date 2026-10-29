@@ -10,10 +10,12 @@ mod doctor;
 pub mod exec;
 mod inspect;
 mod launch;
+mod logs;
 mod manpage;
 mod profile;
 mod runtime;
 mod setup;
+mod status;
 mod steam;
 mod winetricks;
 
@@ -42,6 +44,8 @@ pub fn dispatch(cli: &Cli) -> anyhow::Result<ExitCode> {
         Command::Play(args) => launch::play(&ctx()?, args),
         Command::Run(args) => launch::run(&ctx()?, args),
         Command::Inspect(args) => inspect::run(&ctx()?, args),
+        Command::Status(args) => status::run(&ctx()?, args),
+        Command::Logs(args) => logs::run(&ctx()?, args),
         Command::Runtime(command) => runtime::run(&ctx()?, command),
         Command::Bottle(command) => bottle::run(&ctx()?, command),
         Command::Steam(command) => steam::run(&ctx()?, command),
