@@ -103,6 +103,8 @@ git clone https://github.com/tonianev/uncork.git && cd uncork
 cargo install --path crates/uncork --locked
 ```
 
+Shell completions: `uncork completions zsh` (or `bash`, `fish`) prints the script and `uncork completions --help` says where to put it. For macOS's default zsh: `mkdir -p ~/.zfunc && uncork completions zsh > ~/.zfunc/_uncork`, with `fpath=(~/.zfunc $fpath)` before `compinit` in `~/.zshrc`.
+
 Then check the Mac:
 
 ```bash

@@ -1,7 +1,8 @@
 # Publish a GitHub Release from a `v*` tag: an aarch64-apple-darwin release
 # build of the `uncork` CLI, ad-hoc signed and packed as
-# uncork-v<version>-aarch64-apple-darwin.tar.gz with the licenses and the
-# README, plus SHA256SUMS and generated release notes.
+# uncork-v<version>-aarch64-apple-darwin.tar.gz with its shell completions
+# and man pages, the licenses and the README, plus SHA256SUMS and generated
+# release notes.
 name: release
 
 on:
@@ -67,12 +68,20 @@ jobs:
           test "$(lipo -archs "$bin")" = arm64
           stage="dist/$NAME"
           rm -rf dist
-          mkdir -p "$stage"
+          mkdir -p "$stage/completions" "$stage/man/man1"
           cp "$bin" "$stage/uncork"
           # Apple Silicon refuses to run unsigned arm64 code; an ad-hoc
           # signature is enough. Signing is the last change to the binary.
           codesign --force --sign - "$stage/uncork"
           codesign --verify --strict --verbose=2 "$stage/uncork"
+          # Completions and man pages come from the binary being shipped, so
+          # they match its --help. The paths are the ones a Homebrew formula
+          # installs from (zsh_completion, bash_completion, fish_completion,
+          # man1); keep them stable.
+          "$stage/uncork" completions zsh > "$stage/completions/_uncork"
+          "$stage/uncork" completions bash > "$stage/completions/uncork.bash"
+          "$stage/uncork" completions fish > "$stage/completions/uncork.fish"
+          "$stage/uncork" __manpage "$stage/man/man1"
           cp LICENSE-MIT LICENSE-APACHE README.md "$stage/"
           # No AppleDouble (._*) files or runner user names in the archive.
           COPYFILE_DISABLE=1 tar -C dist --no-mac-metadata --uid 0 --gid 0 --uname root --gname wheel \
@@ -87,6 +96,16 @@ jobs:
           tar -C smoke -xzf "dist/$NAME.tar.gz"
           "smoke/$NAME/uncork" --version
           "smoke/$NAME/uncork" --help > /dev/null
+          # The layout a Homebrew formula installs from.
+          for file in completions/_uncork completions/uncork.bash completions/uncork.fish \
+              man/man1/uncork.1 man/man1/uncork-play.1 man/man1/uncork-doctor.1 \
+              LICENSE-MIT LICENSE-APACHE README.md; do
+            test -s "smoke/$NAME/$file" || { echo "::error::$file is missing from $NAME.tar.gz"; exit 1; }
+          done
+          grep -q '^#compdef uncork$' "smoke/$NAME/completions/_uncork" \
+            || { echo "::error::completions/_uncork is not a zsh completion script"; exit 1; }
+          grep -q '^\.TH uncork 1' "smoke/$NAME/man/man1/uncork.1" \
+            || { echo "::error::man/man1/uncork.1 is not a section 1 man page"; exit 1; }
 
       - name: release notes header
         run: |
@@ -102,6 +121,8 @@ jobs:
             echo '```'
             echo
             echo "The binary is ad-hoc signed, not notarized. A copy downloaded with a web browser is quarantined by Gatekeeper; download with \`curl -LO\`, or clear the flag with \`xattr -d com.apple.quarantine $NAME/uncork\`."
+            echo
+            echo "The archive also holds shell completions (\`completions/\`: zsh, bash and fish; \`uncork completions --help\` says where each goes) and man pages (\`man/man1/\`)."
             echo
             echo "From source: \`cargo install --git https://github.com/$GITHUB_REPOSITORY --tag $GITHUB_REF_NAME --locked uncork\`."
             echo

@@ -37,7 +37,9 @@ fn help_and_version() {
         .success()
         .stdout(contains("Run Windows games on Apple Silicon Macs"))
         .stdout(contains("doctor"))
-        .stdout(contains("__exec").not());
+        .stdout(contains("completions"))
+        .stdout(contains("__exec").not())
+        .stdout(contains("__manpage").not());
     home.uncork()
         .arg("--version")
         .assert()
@@ -53,6 +55,48 @@ fn help_and_version() {
         .assert()
         .code(2)
         .stderr(contains("unrecognized subcommand"));
+}
+
+/// What the release build runs to fill `completions/` and `man/man1/`.
+#[test]
+fn completions_and_man_pages_come_from_the_binary() {
+    let home = Home::new();
+    home.uncork()
+        .args(["completions", "zsh"])
+        .assert()
+        .success()
+        .stdout(contains("#compdef uncork"))
+        .stdout(contains("'play:"))
+        .stdout(contains("'doctor:"));
+    home.uncork()
+        .args(["completions", "bash"])
+        .assert()
+        .success()
+        .stdout(contains("complete -F _uncork"));
+    home.uncork()
+        .args(["completions", "tcsh"])
+        .assert()
+        .code(2)
+        .stderr(contains("possible values"));
+
+    let man1 = home.path().join("man").join("man1");
+    home.uncork()
+        .arg("__manpage")
+        .arg(&man1)
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty())
+        .stderr(contains("man pages"));
+    for page in ["uncork.1", "uncork-play.1", "uncork-bottle-create.1"] {
+        assert!(man1.join(page).is_file(), "{page}");
+    }
+    // roff writes a hyphen as `\-`: `--json` is `\-\-json` in the source.
+    let root = std::fs::read_to_string(man1.join("uncork.1")).unwrap();
+    assert!(root.contains(r"\-\-json"), "{root}");
+    assert!(
+        !home.root().exists(),
+        "completions and man pages touch no data directory"
+    );
 }
 
 #[test]

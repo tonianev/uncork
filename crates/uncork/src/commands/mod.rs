@@ -5,10 +5,12 @@
 //! `--json` output and `uncork bottle env` stay machine-readable.
 
 mod bottle;
+mod completions;
 mod doctor;
 pub mod exec;
 mod inspect;
 mod launch;
+mod manpage;
 mod profile;
 mod runtime;
 mod setup;
@@ -45,7 +47,9 @@ pub fn dispatch(cli: &Cli) -> anyhow::Result<ExitCode> {
         Command::Steam(command) => steam::run(&ctx()?, command),
         Command::Profile(command) => profile::run(&ctx()?, command),
         Command::Winetricks(args) => winetricks::run(&ctx()?, args),
+        Command::Completions(args) => completions::run(args.shell),
         Command::Exec(args) => exec::run(&args.plan),
+        Command::Manpage(args) => manpage::run(args),
     }
 }
 

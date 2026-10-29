@@ -39,7 +39,7 @@ Steps 3 and 4 produce plain data (a `LaunchPlan`) before anything runs. `uncork 
 
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `crates/uncork` | The `uncork` binary. `cli.rs` describes the command-line surface (clap derive; [CLI.md](CLI.md) is its help output), `commands/` holds one handler module per command group plus the Game Mode bundle launcher (`commands/exec.rs`), `output.rs` prints tables, JSON, errors and download progress. The only crate that uses `anyhow`. | all three below |
+| `crates/uncork` | The `uncork` binary. `cli.rs` describes the command-line surface (clap derive; [CLI.md](CLI.md) is its help output), `commands/` holds one handler module per command group plus the Game Mode bundle launcher (`commands/exec.rs`) and the generators of the shell completions and man pages the release archive ships (`commands/completions.rs`, `commands/manpage.rs`), `output.rs` prints tables, JSON, errors and download progress. The only crate that uses `anyhow`. | all three below |
 | `crates/uncork-core` | The engine: data layout, catalog, downloads, components, Wine commands, bottles, registry, graphics backends, profiles, INI edits, launch planning, process spawning, Steam orchestration, Game Mode bundles, host checks. | `uncork-pe`, `uncork-steam` |
 | `crates/uncork-pe` | Reads Windows PE files without running them: machine, bitness, large-address-aware and NX flags, imports, Wine's builtin marker; scans a game directory for the graphics API it uses. | none |
 | `crates/uncork-steam` | Facts about the Windows Steam client with no Wine dependency: a KeyValues (`.vdf`/`.acf`) parser, library and app manifests, Windows-to-prefix path mapping, client argument lists. | none |

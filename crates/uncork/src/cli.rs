@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 /// Run Windows games on Apple Silicon Macs.
 ///
@@ -73,10 +74,34 @@ pub enum Command {
     /// Run winetricks verbs in a bottle (needs `brew install winetricks`).
     Winetricks(WinetricksArgs),
 
+    /// Print a shell completion script to stdout
+    ///
+    /// Install it once, then start a new shell:
+    ///
+    ///   zsh:   mkdir -p ~/.zfunc && uncork completions zsh > ~/.zfunc/_uncork
+    ///          then in ~/.zshrc, before `compinit`: fpath=(~/.zfunc $fpath)
+    ///   bash:  uncork completions bash > "$(brew --prefix)/etc/bash_completion.d/uncork"
+    ///          (read by Homebrew's bash-completion or bash-completion@2)
+    ///   fish:  uncork completions fish > ~/.config/fish/completions/uncork.fish
+    ///
+    /// macOS's default zsh has no user-writable directory in $fpath and does not run compinit; a
+    /// ~/.zshrc with `autoload -Uz compinit && compinit` after the fpath line turns completion on.
+    #[command(verbatim_doc_comment)]
+    #[expect(
+        clippy::doc_markdown,
+        reason = "the help text is shell commands, not markdown"
+    )]
+    Completions(CompletionsArgs),
+
     /// Run a saved launch plan in place of this process (used by Game Mode
     /// app bundles; not for direct use).
     #[command(name = "__exec", hide = true)]
     Exec(ExecArgs),
+
+    /// Write the man pages, section 1 (`uncork.1` and one per subcommand),
+    /// into a directory (used by the release build; not for direct use).
+    #[command(name = "__manpage", hide = true)]
+    Manpage(ManpageArgs),
 }
 
 /// Graphics backend selection on the command line.
@@ -360,12 +385,28 @@ pub struct WinetricksArgs {
     pub verbs: Vec<String>,
 }
 
+/// `uncork completions`.
+#[derive(Debug, Args)]
+pub struct CompletionsArgs {
+    /// The shell to write the script for.
+    #[arg(value_enum)]
+    pub shell: Shell,
+}
+
 /// `uncork __exec` (hidden).
 #[derive(Debug, Args)]
 pub struct ExecArgs {
     /// A JSON file holding a serialized `CommandSpec` (or a `LaunchPlan`,
     /// whose `command` is used).
     pub plan: PathBuf,
+}
+
+/// `uncork __manpage` (hidden).
+#[derive(Debug, Args)]
+pub struct ManpageArgs {
+    /// Directory to write the pages into (created when missing).
+    #[arg(default_value = "man/man1")]
+    pub dir: PathBuf,
 }
 
 #[cfg(test)]
@@ -421,9 +462,27 @@ mod tests {
     }
 
     #[test]
-    fn exec_is_hidden() {
+    fn exec_and_manpage_are_hidden() {
         let help = Cli::command().render_long_help().to_string();
         assert!(!help.contains("__exec"), "{help}");
+        assert!(!help.contains("__manpage"), "{help}");
+        assert!(help.contains("completions"), "{help}");
         assert!(Cli::try_parse_from(["uncork", "__exec", "/tmp/plan.json"]).is_ok());
+        let cli = Cli::try_parse_from(["uncork", "__manpage"]).unwrap();
+        let Command::Manpage(args) = cli.command else {
+            panic!("parsed as {:?}", cli.command);
+        };
+        assert_eq!(args.dir, PathBuf::from("man/man1"));
+    }
+
+    #[test]
+    fn completions_take_a_shell_name() {
+        let cli = Cli::try_parse_from(["uncork", "completions", "zsh"]).unwrap();
+        let Command::Completions(args) = cli.command else {
+            panic!("parsed as {:?}", cli.command);
+        };
+        assert_eq!(args.shell, Shell::Zsh);
+        assert!(Cli::try_parse_from(["uncork", "completions", "tcsh"]).is_err());
+        assert!(Cli::try_parse_from(["uncork", "completions"]).is_err());
     }
 }
